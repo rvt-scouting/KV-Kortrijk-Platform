@@ -249,3 +249,101 @@ try:
                 st.dataframe(df_disp[display_cols], use_container_width=True, hide_index=True)
                 
                 with st.expander("📖 Lees volledige rapport teksten"):
+                    for idx, row in df_internal.iterrows():
+                        date_str = pd.to_datetime(row['Datum']).strftime('%d-%m-%Y')
+                        icon = "🏆" if row['gouden_buzzer'] else "📝"
+                        rating_str = f"({row['Rating']}/10)" if row['Rating'] else ""
+                        st.markdown(f"**{icon} {date_str} - {row['Scout']} {rating_str}**")
+                        if row['rapport_tekst']: st.info(row['rapport_tekst'])
+                        else: st.caption("Geen tekst.")
+                        st.markdown("---")
+            else: st.info("Nog geen interne scouting rapporten.")
+        except Exception as e: st.error(f"Fout: {e}")
+
+        # EXTERNE RAPPORTEN
+        st.markdown("---"); st.subheader("📑 Data Scout Rapporten (Extern)")
+        reports_query = """
+            SELECT m."scheduledDate" as "Datum", sq_h.name as "Thuisploeg", sq_a.name as "Uitploeg", r.position as "Positie", r.label as "Verdict"
+            FROM analysis.scouting_reports r JOIN public.matches m ON r."matchId" = m.id LEFT JOIN public.squads sq_h ON m."homeSquadId" = sq_h.id LEFT JOIN public.squads sq_a ON m."awaySquadId" = sq_a.id
+            WHERE r."iterationId" = %s AND r."playerId" = %s AND m.available = true ORDER BY m."scheduledDate" DESC
+        """
+        try:
+            df_rep = run_query(reports_query, params=(selected_iteration_id, p_player_id))
+            if not df_rep.empty:
+                c1, c2 = st.columns([2, 1])
+                with c1: st.dataframe(df_rep, use_container_width=True, hide_index=True)
+                with c2:
+                    vc = df_rep['Verdict'].value_counts().reset_index(); vc.columns=['Verdict','Aantal']
+                    fig = px.pie(vc, values='Aantal', names='Verdict', hole=0.4, color_discrete_sequence=['#d71920', '#bdc3c7', '#ecf0f1'])
+                    st.plotly_chart(fig, use_container_width=True)
+            else: st.info("Geen externe rapporten.")
+        except: pass
+
+        # SIMILARITY
+        st.markdown("---")
+        st.subheader("👯 Vergelijkbare Spelers")
+        st.caption("Vergelijkt met '25/26' en '2025' (+/- 15 punten). Klik om te navigeren.")
+
+        compare_columns = [col for col, score in profile_mapping.items() if score is not None and score > 0]
+        reverse_mapping = {
+            "KVK Centrale Verdediger": 'cb_kvk_score', "KVK Wingback": 'wb_kvk_score', "KVK Verdedigende Mid.": 'dm_kvk_score',
+            "KVK Centrale Mid.": 'cm_kvk_score', "KVK Aanvallende Mid.": 'acm_kvk_score', "KVK Flank Aanvaller": 'fa_kvk_score',
+            "KVK Spits": 'fw_kvk_score', "Voetballende CV": 'footballing_cb_kvk_score', "Controlerende CV": 'controlling_cb_kvk_score',
+            "Verdedigende Back": 'defensive_wb_kvk_score', "Aanvallende Back": 'offensive_wingback_kvk_score', "Ballenafpakker (CVM)": 'ball_winning_dm_kvk_score',
+            "Spelmaker (CVM)": 'playmaker_dm_kvk_score', "Box-to-Box (CM)": 'box_to_box_cm_kvk_score', "Diepgaande '10'": 'deep_running_acm_kvk_score',
+            "Spelmakende '10'": 'playmaker_off_acm_kvk_score', "Buitenspeler (Binnendoor)": 'fa_inside_kvk_score', "Buitenspeler (Buitenom)": 'fa_wide_kvk_score',
+            "Targetman": 'fw_target_kvk_score', "Lopende Spits": 'fw_running_kvk_score', "Afmaker": 'fw_finisher_kvk_score'
+        }
+        db_cols = [reverse_mapping[c] for c in compare_columns if c in reverse_mapping]
+
+        if db_cols:
+            with st.expander(f"Toon top 10 spelers die lijken op {selected_player_name}", expanded=False):
+                cols_str = ", ".join([f'a.{c}' for c in db_cols])
+                sim_query = f"""
+                    SELECT p.id as "playerId", p.commonname as "Naam", sq.name as "Team", i.season as "Seizoen", i."competitionName" as "Competitie", {cols_str}
+                    FROM analysis.final_impect_scores a
+                    JOIN public.players p ON CAST(a."playerId" AS TEXT) = CAST(p.id AS TEXT)
+                    LEFT JOIN public.squads sq ON CAST(a."squadId" AS TEXT) = CAST(sq.id AS TEXT)
+                    JOIN public.iterations i ON CAST(a."iterationId" AS TEXT) = CAST(i.id AS TEXT)
+                    WHERE a.position = %s AND i.season IN ('25/26', '2025')
+                """
+                try:
+                    df_all_p = run_query(sim_query, params=(row['position'],))
+                    if not df_all_p.empty:
+                        df_all_p['unique_id'] = df_all_p['playerId'].astype(str) + "_" + df_all_p['Seizoen']
+                        df_all_p = df_all_p.drop_duplicates(subset=['unique_id']).set_index('unique_id')
+                        curr_uid = f"{p_player_id}_{selected_season}"
+                        
+                        if curr_uid in df_all_p.index:
+                            target_vec = df_all_p.loc[curr_uid, db_cols]
+                            target_avg = target_vec.mean()
+                            others_avg = df_all_p[db_cols].mean(axis=1)
+                            mask = (others_avg >= (target_avg - 15)) & (others_avg <= (target_avg + 15))
+                            df_filtered = df_all_p[mask]
+                            
+                            if not df_filtered.empty:
+                                diff = (df_filtered[db_cols] - target_vec).abs().mean(axis=1)
+                                sim = (100 - diff).sort_values(ascending=False)
+                                if curr_uid in sim.index: sim = sim.drop(curr_uid)
+                                top_10 = sim.head(10).index
+                                results = df_filtered.loc[top_10].copy()
+                                results['Gelijkenis %'] = sim.loc[top_10]
+                                results['Avg Score'] = others_avg.loc[top_10]
+                                
+                                def color_sim(val):
+                                    c = '#2ecc71' if val > 90 else '#27ae60' if val > 80 else 'black'
+                                    return f'color: {c}; font-weight: bold'
+
+                                disp_df = results[['Naam', 'Team', 'Seizoen', 'Competitie', 'Avg Score', 'Gelijkenis %']].reset_index(drop=True)
+                                event = st.dataframe(disp_df.style.applymap(color_sim, subset=['Gelijkenis %']).format({'Gelijkenis %': '{:.1f}%', 'Avg Score': '{:.1f}'}), use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
+                                
+                                if len(event.selection.rows) > 0:
+                                    idx = event.selection.rows[0]; cr = disp_df.iloc[idx]
+                                    st.session_state.pending_nav = {"season": cr['Seizoen'], "competition": cr['Competitie'], "target_name": cr['Naam'], "mode": "Spelers"}
+                                    st.rerun()
+                            else: st.warning("Geen spelers van dit niveau.")
+                        else: st.warning("Huidige speler data niet compleet voor vergelijking.")
+                    else: st.info("Geen vergelijkingsdata.")
+                except Exception as e: st.error("Fout sim."); st.code(e)
+    else: st.error("Geen data.")
+except Exception as e: st.error("Fout details."); st.code(e)
