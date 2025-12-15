@@ -249,10 +249,9 @@ try:
             df_phys = run_query(q_phys, params=(str(final_player_id),))
             
             if not df_phys.empty:
-                # Fix dubbele kolommen voor styler
+                # Fix dubbele kolommen
                 df_phys = df_phys.loc[:, ~df_phys.columns.duplicated()]
 
-                # Stylings functie voor A/B/C
                 def color_physical_score(val):
                     val_str = str(val).strip().upper()
                     if val_str == 'A': return 'color: #2ecc71; font-weight: bold' 
@@ -260,13 +259,12 @@ try:
                     elif val_str == 'C': return 'color: #e74c3c; font-weight: bold' 
                     return ''
 
-                # Hoofdtabel
                 main_cols = ["total_matches", "PSV 99", "TTS", "Sprint Dis", "Sprint Cnt", "Tot. Dis"]
-                df_phys_main = df_phys[[c for c in main_cols if c in df_phys.columns]].copy()
+                cols_present = [c for c in main_cols if c in df_phys.columns]
+                df_phys_main = df_phys[cols_present].copy()
                 
                 st.dataframe(df_phys_main.style.applymap(color_physical_score), use_container_width=True, hide_index=True)
                 
-                # Uitklapbaar
                 with st.expander("📊 Toon ALLE fysieke scores"):
                     score_cols = [c for c in df_phys.columns if c.endswith('_score')]
                     if score_cols:
@@ -276,10 +274,11 @@ try:
         except Exception as e: st.error(f"Fout fysieke data: {e}")
 
         # =========================================================================
-        # INTERNE RAPPORTEN (TERUG TOEGEVOEGD!)
+        # INTERNE RAPPORTEN
         # =========================================================================
         st.markdown("---")
         st.subheader("🕵️ Scouting Rapporten (Intern)")
+        
         scouting_query = """
             SELECT s.naam as "Scout", r.aangemaakt_op as "Datum", r.positie_gespeeld as "Positie", r.profiel_code as "Profiel",
                 r.beoordeling as "Rating", r.advies as "Advies", r.rapport_tekst, r.gouden_buzzer, COALESCE(m.id::text, r.custom_wedstrijd_naam) as "Wedstrijd_Ref"
@@ -292,15 +291,33 @@ try:
         try:
             df_internal = run_query(scouting_query, params=(str(final_player_id),))
             if not df_internal.empty:
-                display_cols = ["Datum", "Scout", "Positie", "Profiel", "Rating", "Advies"]
-                df_disp = df_internal.copy()
-                df_disp['Datum'] = pd.to_datetime(df_disp['Datum']).dt.strftime('%d-%m-%Y')
+                # --- NIEUWE LAYOUT MET CHART ---
+                c1, c2 = st.columns([2, 1])
                 
-                def highlight_rows(row):
-                    return ['background-color: #fff9c4'] * len(row) if row.name in df_internal[df_internal['gouden_buzzer']==True].index else [''] * len(row)
+                with c1:
+                    display_cols = ["Datum", "Scout", "Positie", "Profiel", "Rating", "Advies"]
+                    df_disp = df_internal.copy()
+                    df_disp['Datum'] = pd.to_datetime(df_disp['Datum']).dt.strftime('%d-%m-%Y')
+                    
+                    def highlight_rows(row):
+                        return ['background-color: #fff9c4'] * len(row) if row.name in df_internal[df_internal['gouden_buzzer']==True].index else [''] * len(row)
+                        
+                    # Tabel links
+                    st.dataframe(df_disp[display_cols], use_container_width=True, hide_index=True)
 
-                st.dataframe(df_disp[display_cols], use_container_width=True, hide_index=True)
+                with c2:
+                    # Pie Chart rechts (Advies)
+                    if 'Advies' in df_internal.columns and df_internal['Advies'].notna().any():
+                         vc = df_internal['Advies'].value_counts().reset_index()
+                         vc.columns = ['Advies', 'Aantal']
+                         
+                         fig = px.pie(vc, values='Aantal', names='Advies', hole=0.4, 
+                                      color_discrete_sequence=['#d71920', '#bdc3c7', '#ecf0f1'])
+                         st.plotly_chart(fig, use_container_width=True)
+                    else:
+                        st.info("Geen adviezen.")
                 
+                # Teksten eronder
                 with st.expander("📖 Lees volledige rapport teksten"):
                     for idx, row in df_internal.iterrows():
                         date_str = pd.to_datetime(row['Datum']).strftime('%d-%m-%Y')
