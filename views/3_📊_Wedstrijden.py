@@ -84,7 +84,6 @@ def get_match_data_optimized(match_id):
             CAST(e."end" -> 'coordinates' ->> 'x' AS FLOAT) as x_end,
             CAST(e."end" -> 'coordinates' ->> 'y' AS FLOAT) as y_end,
             
-            -- xT waardes uit JSON
             CAST(e."pxT" ->> 'team' AS FLOAT) as "xT_Team_Raw",
             CAST(e."pxT" ->> 'opponent' AS FLOAT) as "xT_Opp_Raw"
         FROM public.match_events e
@@ -124,16 +123,11 @@ if df_events.empty: st.warning("Geen data."); st.stop()
 # -----------------------------------------------------------------------------
 # 3. GEAVANCEERDE xT BEREKENING (DELTA)
 # -----------------------------------------------------------------------------
-# Data cleaning
 df_events['action_clean'] = df_events['action'].astype(str).str.upper().str.strip()
 df_events['result_clean'] = df_events['result'].astype(str).str.upper().str.strip()
 home_id_str = normalize_id(match_row['homeSquadId'])
 df_events['squadId_clean'] = df_events['squadId'].apply(normalize_id)
 
-# 1. Bepaal "Netto Dreiging voor THUISPLOEG" op elk moment (State)
-# Als Home aan bal: Dreiging = xT_Team - xT_Opponent
-# Als Away aan bal: Dreiging = xT_Opponent - xT_Team (want gevaar voor Home is negatief)
-# We nemen xT_Team_Raw als 0 indien leeg
 df_events['xT_Team_Raw'] = df_events['xT_Team_Raw'].fillna(0)
 df_events['xT_Opp_Raw'] = df_events['xT_Opp_Raw'].fillna(0)
 
@@ -141,21 +135,11 @@ def calc_home_threat(row):
     if row['squadId_clean'] == home_id_str:
         return row['xT_Team_Raw'] - row['xT_Opp_Raw']
     else:
-        # Tegenstander aan bal: hun 'team' threat is gevaar voor ons (dus negatief voor Home)
-        # Hun 'opponent' threat (wij) is positief voor ons.
         return row['xT_Opp_Raw'] - row['xT_Team_Raw']
 
 df_events['Home_Net_Threat_State'] = df_events.apply(calc_home_threat, axis=1)
-
-# 2. Bereken Delta (Verschil met vorig event)
-# Shift(-1) pakt de waarde van het VOLGENDE event (de nieuwe staat na de actie)
-# Delta = Nieuwe Staat - Oude Staat
 df_events['xT_Generated_Raw'] = df_events['Home_Net_Threat_State'].shift(-1) - df_events['Home_Net_Threat_State']
 
-# 3. Ken toe aan speler (Correctie voor perspectief)
-# Als speler van Home is: Positieve Delta is goed.
-# Als speler van Away is: Negatieve Delta (Home threat omlaag) is goed voor hem.
-# Dus: Speler Score = Delta * (1 als Home, -1 als Away)
 def calc_player_xt(row):
     if pd.isna(row['xT_Generated_Raw']): return 0.0
     if row['squadId_clean'] == home_id_str:
@@ -165,8 +149,8 @@ def calc_player_xt(row):
 
 df_events['xT_Generated_Player'] = df_events.apply(calc_player_xt, axis=1)
 
-# KLEUREN
-team_colors = {match_row['home']: '#e74c3c', match_row['away']: '#3498db', 'Onbekend': '#95a5a6'} # Rood vs Blauw
+# BASIS KLEUREN TEAM
+team_colors = {match_row['home']: '#e74c3c', match_row['away']: '#3498db', 'Onbekend': '#95a5a6'} 
 
 # -----------------------------------------------------------------------------
 # 4. DASHBOARD
@@ -185,17 +169,25 @@ with tab1:
 
     st.markdown(f"<h1 style='text-align: center; color: #333;'>{match_row['home']} {score_home} - {score_away} {match_row['away']}</h1>", unsafe_allow_html=True)
 
-    # --- TIJDLIJN ---
+    # --- TIJDLIJN (Met kleuren) ---
     col_tl, col_st = st.columns([3, 2])
     with col_tl:
         st.subheader("Wedstrijdverloop")
         mask_hl = df_events['action_clean'].isin(['GOAL', 'OWN_GOAL', 'CARD', 'YELLOW_CARD', 'RED_CARD', 'SUBSTITUTION'])
         imp = df_events[mask_hl].copy()
+        
         if not imp.empty:
-            fig_tl = px.scatter(imp, x="Minuut", y="Team", color="Team", symbol="action_clean",
-                                color_discrete_map=team_colors, size_max=15, hover_data=["Speler"])
+            # Event kleuren
+            event_colors = {
+                "GOAL": "#2ecc71", "OWN_GOAL": "#e74c3c", 
+                "CARD": "#f1c40f", "YELLOW_CARD": "#f1c40f", "RED_CARD": "#c0392b",
+                "SUBSTITUTION": "#3498db"
+            }
+            
+            fig_tl = px.scatter(imp, x="Minuut", y="Team", color="action_clean", symbol="action_clean",
+                                color_discrete_map=event_colors, size_max=15, hover_data=["Speler"])
             fig_tl.update_traces(marker=dict(size=14, line=dict(width=1, color='DarkSlateGrey')))
-            fig_tl.update_layout(height=350, showlegend=False)
+            fig_tl.update_layout(height=350, showlegend=True) # Legende weer aan zodat je ziet wat de kleuren betekenen
             st.plotly_chart(fig_tl, use_container_width=True)
         else: st.info("Geen hoogtepunten.")
 
@@ -206,18 +198,16 @@ with tab1:
         piv['Total'] = piv.sum(axis=1)
         st.dataframe(piv.sort_values('Total', ascending=False).drop(columns='Total'), use_container_width=True)
 
-    # --- MOMENTUM (xT) & PASSES ---
+    # --- xT TOTAAL & PASSES ---
     st.divider()
     c1, c2 = st.columns(2)
     with c1:
-        st.write("**Momentum (Netto xT per Minuut)**")
-        # We tellen de 'xT Generated' op per minuut voor het team dat de actie maakte
-        df_events['Min_Bin'] = df_events['Minuut'].astype(int)
-        mom = df_events.groupby(['Team', 'Min_Bin'])['xT_Generated_Player'].sum().reset_index()
+        st.write("**Total Expected Threat (xT) per Team**")
+        # Som van raw xT_Team per team (Creatie van gevaar)
+        xt_total = df_events.groupby('Team')['xT_Team_Raw'].sum().reset_index()
         
-        fig_xt = px.line(mom, x='Min_Bin', y='xT_Generated_Player', color='Team', 
-                         color_discrete_map=team_colors, title="xT Generatie (Flow)")
-        fig_xt.update_layout(xaxis_title="Minuut", yaxis_title="xT Generated")
+        fig_xt = px.bar(xt_total, x='Team', y='xT_Team_Raw', color='Team', 
+                        color_discrete_map=team_colors, title="Totaal xT (Gevaar gecreëerd)")
         st.plotly_chart(fig_xt, use_container_width=True)
 
     with c2:
@@ -270,7 +260,11 @@ with tab3:
     with c2:
         fig_bar = px.bar(xt_stats, x='xT_Generated_Player', y='Speler', color='Team', orientation='h',
                          color_discrete_map=team_colors, title="Top 20 xT Spelers")
-        fig_bar.update_layout(yaxis={'categoryorder':'total ascending'})
+        # MARGE FIX: Meer ruimte links voor namen
+        fig_bar.update_layout(
+            yaxis={'categoryorder':'total ascending'},
+            margin=dict(l=150) 
+        )
         st.plotly_chart(fig_bar, use_container_width=True)
 
 # -----------------------------------------------------------------------------
