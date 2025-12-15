@@ -124,13 +124,12 @@ with tab1:
             st.info("👆 Selecteer hierboven een speler om het formulier te openen.")
 
 # =============================================================================
-# TAB 2: OVERZICHT
+# TAB 2: OVERZICHT & BEWERKEN
 # =============================================================================
 with tab2:
-    st.header("📋 Recente aanbiedingen")
+    st.header("📋 Recente aanbiedingen beheren")
     
-    # We joinen nu de scouting tabel terug aan de public.players tabel
-    # Zo halen we de 'verse' naam en team op, ipv wat we ooit hebben ingetypt
+    # We halen de data op, inclusief de verborgen 'id' die we nodig hebben voor de update
     overview_query = """
         SELECT 
             o.id,
@@ -140,6 +139,8 @@ with tab2:
             o.status as "Status",
             o.makelaar as "Makelaar",
             o.vraagprijs as "Vraagprijs",
+            o."TMlink" as "TM",
+            o.video_link as "Video",
             o.opmerkingen as "Notities",
             o.ingevoerd_door as "Scout",
             o.aangeboden_datum as "Datum"
@@ -149,23 +150,117 @@ with tab2:
         ORDER BY o.aangeboden_datum DESC
     """
     
+    # We laden de dataframe in sessie state zodat we het origineel kunnen vergelijken
+    # Dit voorkomt dat de tabel constant herlaadt terwijl je typt
+    if "df_overview" not in st.session_state:
+        st.session_state.df_overview = pd.DataFrame()
+
+    # Vernieuw knop (handig als iemand anders iets heeft toegevoegd)
+    if st.button("🔄 Tabel Verversen"):
+        st.cache_data.clear() # Cache wissen indien nodig
+        del st.session_state.df_overview # Forceer herladen
+        st.rerun()
+
     try:
-        df_overview = run_query(overview_query)
+        # Alleen ophalen als het nog niet in session state zit of leeg is
+        if st.session_state.df_overview.empty:
+            st.session_state.df_overview = run_query(overview_query)
         
-        if not df_overview.empty:
-            # Opmaak voor de tabel
-            st.dataframe(
-                df_overview, 
+        df_display = st.session_state.df_overview.copy()
+        
+        if not df_display.empty:
+            # ---------------------------------------------------------
+            # DE DATA EDITOR CONFIGURATIE
+            # ---------------------------------------------------------
+            edited_df = st.data_editor(
+                df_display,
                 use_container_width=True,
+                hide_index=True,
+                key="scouting_editor", # Belangrijk: unieke sleutel
+                disabled=["id", "Naam", "Huidig Team", "Geboortedatum", "Scout", "Datum"], # Deze kolommen mag je NIET aanpassen
                 column_config={
-                    "Vraagprijs": st.column_config.NumberColumn(format="€ %.2f"),
+                    "id": None, # Verberg de ID kolom, maar hij is er wel!
+                    "Vraagprijs": st.column_config.NumberColumn(format="€ %.2f", min_value=0, step=10000),
                     "Datum": st.column_config.DatetimeColumn(format="DD-MM-YYYY"),
-                    "Video Link": st.column_config.LinkColumn("Video")
-                },
-                hide_index=True
+                    "Video": st.column_config.LinkColumn("Video Link", display_text="Link"),
+                    "TM": st.column_config.LinkColumn("Transfermarkt", display_text="TM"),
+                    "Status": st.column_config.SelectboxColumn(
+                        "Status",
+                        help="Wijzig de status van de speler",
+                        width="medium",
+                        options=[
+                            "Te bekijken", 
+                            "Interessant", 
+                            "Afgekeurd", 
+                            "Onderhandeling", 
+                            "In de gaten houden"
+                        ],
+                        required=True
+                    ),
+                    "Notities": st.column_config.TextColumn("Notities", width="large")
+                }
             )
+
+            # ---------------------------------------------------------
+            # LOGICA OM WIJZIGINGEN OP TE SLAAN
+            # ---------------------------------------------------------
+            st.caption("✍️ Pas de waarden direct aan in de tabel en klik hieronder op Opslaan.")
+            
+            if st.button("💾 Wijzigingen Opslaan", type="primary"):
+                # We moeten weten WAT er veranderd is. 
+                # Streamlit geeft ons de hele 'edited_df'. We kunnen vergelijken of via session_state kijken.
+                # De 'edited_rows' in session state is het makkelijkst, die bevat alleen de changes.
+                
+                changes = st.session_state["scouting_editor"]["edited_rows"]
+                
+                if not changes:
+                    st.info("Geen wijzigingen gevonden.")
+                else:
+                    # Mapping van Scherm-kolomnaam naar Database-kolomnaam
+                    col_mapping = {
+                        "Status": "status",
+                        "Makelaar": "makelaar",
+                        "Vraagprijs": "vraagprijs",
+                        "TM": "\"TMlink\"", # Let op de quotes voor TMlink
+                        "Video": "video_link",
+                        "Notities": "opmerkingen"
+                    }
+                    
+                    success_count = 0
+                    
+                    for index, row_changes in changes.items():
+                        # Haal de ECHTE database ID op uit de originele dataframe op basis van de index
+                        # Let op: dit werkt alleen als de sortering niet tussentijds is veranderd door de user in de UI
+                        # (st.data_editor sorteren verandert de index niet, dus dat is veilig)
+                        record_id = df_display.iloc[index]['id']
+                        
+                        # Bouw de UPDATE query
+                        set_clauses = []
+                        values = []
+                        
+                        for col_name, new_value in row_changes.items():
+                            if col_name in col_mapping:
+                                db_col = col_mapping[col_name]
+                                set_clauses.append(f"{db_col} = %s")
+                                values.append(new_value)
+                        
+                        if set_clauses:
+                            query = f"UPDATE scouting.offered_players SET {', '.join(set_clauses)} WHERE id = %s"
+                            values.append(str(record_id))
+                            
+                            if execute_command(query, tuple(values)):
+                                success_count += 1
+                    
+                    if success_count > 0:
+                        st.success(f"✅ {success_count} speler(s) succesvol bijgewerkt!")
+                        # Cache wissen en herladen om de nieuwe data te tonen
+                        del st.session_state.df_overview
+                        st.rerun()
+                    else:
+                        st.error("Er ging iets mis bij het opslaan.")
+
         else:
-            st.info("Nog geen spelers aangeboden.")
+            st.info("Nog geen spelers in de lijst.")
             
     except Exception as e:
-        st.error(f"Fout bij ophalen lijst: {e}")
+        st.error(f"Fout in overzicht: {e}")
