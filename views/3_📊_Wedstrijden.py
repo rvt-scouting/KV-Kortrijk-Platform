@@ -15,7 +15,10 @@ st.sidebar.header("🔍 Wedstrijd Selectie")
 try:
     df_seasons = run_query("SELECT DISTINCT season FROM public.iterations ORDER BY season DESC")
     seasons = df_seasons['season'].tolist()
-    sel_season = st.sidebar.selectbox("Seizoen", seasons)
+    idx_s = 0
+    if "sb_season" in st.session_state and st.session_state.sb_season in seasons:
+        idx_s = seasons.index(st.session_state.sb_season)
+    sel_season = st.sidebar.selectbox("Seizoen", seasons, index=idx_s, key="sb_season")
 except:
     st.error("Geen seizoenen gevonden."); st.stop()
 
@@ -27,7 +30,6 @@ else: st.stop()
 
 # B. Wedstrijd
 if sel_season and sel_comp:
-    # We halen matches op die 'beschikbaar' zijn
     q_matches = """
         SELECT m.id, m."scheduledDate", h.name as home, a.name as away, 
                m."homeSquadId", m."awaySquadId"
@@ -47,8 +49,6 @@ if sel_season and sel_comp:
     match_opts = {f"{r['home']} - {r['away']} ({r['scheduledDate'].strftime('%d-%m')})": r['id'] for _, r in df_matches.iterrows()}
     sel_match_label = st.sidebar.selectbox("Wedstrijd", list(match_opts.keys()))
     sel_match_id = match_opts[sel_match_label]
-    
-    # Huidige wedstrijd info
     match_row = df_matches[df_matches['id'] == sel_match_id].iloc[0]
 else:
     st.stop()
@@ -57,11 +57,12 @@ st.title(f"🏟️ {match_row['home']} vs {match_row['away']}")
 st.caption(f"Datum: {match_row['scheduledDate'].strftime('%d-%m-%Y %H:%M')}")
 
 # -----------------------------------------------------------------------------
-# 2. DATA OPHALEN (EVENTS)
+# 2. DATA OPHALEN (UPDATED JSON PATHS)
 # -----------------------------------------------------------------------------
-# We halen de JSON velden (start, end, gameTime, player) direct uit elkaar in SQL
 @st.cache_data
 def get_match_events(match_id):
+    # LET OP: We gebruiken nu de nested paden: start -> 'coordinates' ->> 'x'
+    # En we joinen players p om de naam te krijgen via player ->> 'id'
     q = """
         SELECT 
             e.id,
@@ -70,14 +71,27 @@ def get_match_events(match_id):
             e.action,
             e."actionType",
             e.result,
-            e.player ->> 'name' as "Speler",
-            (e."gameTime" ->> 'minute')::int as "Minuut",
-            (e."start" ->> 'x')::float as x_start,
-            (e."start" ->> 'y')::float as y_start,
-            (e."end" ->> 'x')::float as x_end,
-            (e."end" ->> 'y')::float as y_end
+            p.commonname as "Speler",
+            
+            -- Tijd data
+            (e."gameTime" ->> 'gameTime') as "Tijd",
+            CAST(e."gameTime" ->> 'gameTimeInSec' AS FLOAT) / 60.0 as "Minuut",
+            
+            -- Start Coördinaten (Nested)
+            CAST(e."start" -> 'coordinates' ->> 'x' AS FLOAT) as x_start,
+            CAST(e."start" -> 'coordinates' ->> 'y' AS FLOAT) as y_start,
+            
+            -- Eind Coördinaten (Nested, kan null zijn)
+            CAST(e."end" -> 'coordinates' ->> 'x' AS FLOAT) as x_end,
+            CAST(e."end" -> 'coordinates' ->> 'y' AS FLOAT) as y_end,
+            
+            -- Extra data (Pass afstand, xT)
+            CAST(e."pass" ->> 'distance' AS FLOAT) as "Pass Afstand",
+            CAST(e."pxT" ->> 'team' AS FLOAT) as "xT"
+
         FROM public.match_events e
         LEFT JOIN public.squads sq ON e."squadId" = sq.id
+        LEFT JOIN public.players p ON CAST(e.player ->> 'id' AS INTEGER) = p.id
         WHERE e."matchId" = %s
         ORDER BY e.index ASC
     """
@@ -87,115 +101,155 @@ with st.spinner("Event data laden..."):
     df_events = get_match_events(sel_match_id)
 
 if df_events.empty:
-    st.info("Geen event data beschikbaar voor deze wedstrijd.")
+    st.info("Geen event data beschikbaar.")
     st.stop()
 
 # -----------------------------------------------------------------------------
-# 3. STATS & TIMELINE
+# 3. STATS & SCOREBORD
 # -----------------------------------------------------------------------------
 tab1, tab2, tab3 = st.tabs(["📊 Stats & Tijdlijn", "📍 Pitch Map (Veld)", "📋 Data Lijst"])
 
 with tab1:
-    # A. Scorebord (Simulatie o.b.v. Goals)
-    goals = df_events[df_events['action'].isin(['Goal', 'Own Goal']) & (df_events['result'] == 'Success')] # Aanpassen aan jouw data labels!
-    score_home = len(goals[goals['squadId'] == match_row['homeSquadId']])
-    score_away = len(goals[goals['squadId'] == match_row['awaySquadId']])
-    
+    # A. Scorebord Logic (Incl Own Goals)
+    home_id = match_row['homeSquadId']
+    away_id = match_row['awaySquadId']
+
+    goals_home = df_events[(df_events['squadId'] == home_id) & (df_events['action'] == 'Goal') & (df_events['result'] == 'Success')]
+    own_goals_away = df_events[(df_events['squadId'] == away_id) & (df_events['action'] == 'Own Goal') & (df_events['result'] == 'Success')]
+    score_home = len(goals_home) + len(own_goals_away)
+
+    goals_away = df_events[(df_events['squadId'] == away_id) & (df_events['action'] == 'Goal') & (df_events['result'] == 'Success')]
+    own_goals_home = df_events[(df_events['squadId'] == home_id) & (df_events['action'] == 'Own Goal') & (df_events['result'] == 'Success')]
+    score_away = len(goals_away) + len(own_goals_home)
+
     c1, c2, c3 = st.columns([1, 2, 1])
     with c2:
-        st.markdown(f"<h1 style='text-align: center;'>{score_home} - {score_away}</h1>", unsafe_allow_html=True)
-    
-    # B. Tijdlijn Chart
-    st.subheader("Wedstrijdverloop")
-    
-    # We filteren op belangrijke events
-    imp_events = df_events[df_events['action'].isin(['Goal', 'Card', 'Substitution'])].copy()
-    if not imp_events.empty:
-        fig_tl = px.scatter(
-            imp_events, 
-            x="Minuut", 
-            y="Team", 
-            color="action", 
-            symbol="action",
-            hover_data=["Speler", "actionType"],
-            size_max=15,
-            title="Tijdlijn Belangrijke Momenten"
-        )
-        fig_tl.update_traces(marker=dict(size=12))
-        fig_tl.update_layout(xaxis=dict(range=[0, 95]), height=300)
-        st.plotly_chart(fig_tl, use_container_width=True)
-    else:
-        st.info("Geen goals of kaarten gevonden in events.")
+        st.markdown(f"<h1 style='text-align: center; border: 2px solid #ddd; border-radius:10px; padding:10px;'>{score_home} - {score_away}</h1>", unsafe_allow_html=True)
+        st.caption("Eindstand (inclusief eigen doelpunten)")
 
-    # C. Basis Stats
-    st.subheader("Team Statistieken")
-    # Tel acties per team
-    stats = df_events.groupby(['Team', 'action']).size().reset_index(name='Aantal')
-    # Pivot voor mooie tabel
-    stats_pivot = stats.pivot(index='action', columns='Team', values='Aantal').fillna(0).astype(int)
-    st.dataframe(stats_pivot, use_container_width=True)
+    # B. Tijdlijn
+    st.subheader("Wedstrijdverloop")
+    mask_tl = (df_events['action'].isin(['Goal', 'Own Goal', 'Card', 'Substitution'])) & ((df_events['result'] == 'Success') | (df_events['action'].isin(['Card', 'Substitution'])))
+    imp_events = df_events[mask_tl].copy()
+    
+    if not imp_events.empty:
+        color_map = {"Goal": "#2ecc71", "Own Goal": "#e74c3c", "Card": "#f1c40f", "Substitution": "#3498db"}
+        fig_tl = px.scatter(
+            imp_events, x="Minuut", y="Team", color="action", symbol="action",
+            hover_data=["Speler", "Tijd", "result"], size_max=15, color_discrete_map=color_map,
+            title="Tijdlijn"
+        )
+        fig_tl.update_traces(marker=dict(size=14, line=dict(width=1, color='DarkSlateGrey')))
+        fig_tl.update_layout(height=300)
+        st.plotly_chart(fig_tl, use_container_width=True)
+
+    # C. xT en Stats
+    st.subheader("Gevaar & Balbezit")
+    c_xt1, c_xt2 = st.columns(2)
+    
+    with c_xt1:
+        # Totaal xT per team
+        xt_stats = df_events.groupby('Team')['xT'].sum().reset_index()
+        fig_xt = px.bar(xt_stats, x='Team', y='xT', title="Expected Threat (xT) Totaal", color='Team')
+        st.plotly_chart(fig_xt, use_container_width=True)
+        
+    with c_xt2:
+        # Passen
+        passes = df_events[(df_events['action'] == 'Pass') & (df_events['result'] == 'Success')]
+        if not passes.empty:
+            p_counts = passes['Team'].value_counts().reset_index()
+            p_counts.columns = ['Team', 'Passes']
+            fig_pie = px.pie(p_counts, values='Passes', names='Team', title="Succesvolle Passes", hole=0.4)
+            st.plotly_chart(fig_pie, use_container_width=True)
 
 # -----------------------------------------------------------------------------
-# 4. PITCH MAP (VELD ANALYSE)
+# 4. PITCH MAP
 # -----------------------------------------------------------------------------
 with tab2:
     st.subheader("📍 Event Locaties")
     
-    c_fil1, c_fil2, c_fil3 = st.columns(3)
+    cf1, cf2, cf3 = st.columns(3)
     
-    # Filters
-    teams_list = df_events['Team'].unique().tolist()
-    sel_teams_map = c_fil1.multiselect("Selecteer Team(s)", teams_list, default=teams_list)
+    teams = df_events['Team'].dropna().unique().tolist()
+    sel_teams = cf1.multiselect("Teams", teams, default=teams)
     
-    actions_list = df_events['action'].unique().tolist()
-    default_actions = ['Shot', 'Goal'] if 'Shot' in actions_list else actions_list[:3]
-    sel_actions_map = c_fil2.multiselect("Type Actie", actions_list, default=default_actions)
+    actions = df_events['action'].unique().tolist()
+    defs = [x for x in ['Shot', 'Goal', 'Pass'] if x in actions]
+    if not defs: defs = actions[:3]
+    sel_actions = cf2.multiselect("Acties", actions, default=defs)
     
-    players_list = df_events['Speler'].dropna().unique().tolist()
-    sel_players_map = c_fil3.multiselect("Specifieke Speler(s) (Optioneel)", players_list)
+    players = df_events['Speler'].dropna().unique().tolist()
+    sel_players = cf3.multiselect("Speler (Optioneel)", players)
+    
+    show_lines = st.checkbox("Toon Pass/Looplijnen (Start -> Eind)", value=False)
 
-    # Filter Data
-    mask = (df_events['Team'].isin(sel_teams_map)) & (df_events['action'].isin(sel_actions_map))
-    if sel_players_map:
-        mask = mask & (df_events['Speler'].isin(sel_players_map))
-    
-    df_map = df_events[mask]
-    
-    if not df_map.empty:
-        # PLOTLY VOETBALVELD (Schematisch)
+    # Filter
+    df_m = df_events[
+        (df_events['Team'].isin(sel_teams)) & 
+        (df_events['action'].isin(sel_actions))
+    ]
+    if sel_players:
+        df_m = df_m[df_m['Speler'].isin(sel_players)]
+        
+    if not df_m.empty:
         fig = go.Figure()
 
-        # 1. Teken het veld (Simpel: Groene Rechthoek + Lijnen)
-        # Aanname: x loopt van 0-100, y van 0-100 (Check je data! Soms is het 105x68)
-        fig.add_shape(type="rect", x0=0, y0=0, x1=100, y1=100, line=dict(color="white"), fillcolor="green", layer="below")
-        fig.add_shape(type="line", x0=50, y0=0, x1=50, y1=100, line=dict(color="white")) # Middenlijn
-        fig.add_shape(type="circle", x0=40, y0=40, x1=60, y1=60, line=dict(color="white")) # Middencirkel
+        # VELD ACHTERGROND (105x68 Standaard, maar data lijkt 100x100 genormaliseerd)
+        # We gebruiken 0-100 op basis van je voorbeeld: {"x": 38.1, "y": 26.6}
+        fig.add_shape(type="rect", x0=0, y0=0, x1=100, y1=100, line=dict(color="white"), fillcolor="#4CAF50", layer="below")
+        fig.add_shape(type="line", x0=50, y0=0, x1=50, y1=100, line=dict(color="white", width=2))
+        fig.add_shape(type="circle", x0=40, y0=40, x1=60, y1=60, line=dict(color="white", width=2))
+        fig.add_shape(type="rect", x0=0, y0=20, x1=17, y1=80, line=dict(color="white", width=2)) # Box L
+        fig.add_shape(type="rect", x0=83, y0=20, x1=100, y1=80, line=dict(color="white", width=2)) # Box R
         
-        # 2. Plot Events
-        # We gebruiken verschillende kleuren per Team
-        for team in sel_teams_map:
-            dft = df_map[df_map['Team'] == team]
+        # PLOT EVENTS
+        colors = px.colors.qualitative.Bold
+        
+        for i, team in enumerate(sel_teams):
+            dft = df_m[df_m['Team'] == team]
+            color = colors[i % len(colors)]
+            
+            # Markers (Startpositie)
             fig.add_trace(go.Scatter(
-                x=dft['x_start'],
-                y=dft['y_start'],
-                mode='markers',
-                name=team,
-                marker=dict(size=8, line=dict(width=1, color='black')),
-                text=dft['Speler'] + " (" + dft['action'] + ")"
+                x=dft['x_start'], y=dft['y_start'],
+                mode='markers', name=team,
+                marker=dict(size=8, color=color, line=dict(width=1, color='black')),
+                text=dft['Speler'] + " (" + dft['action'] + ")",
+                hovertemplate="%{text}<br>Min: %{customdata[0]}<br>xT: %{customdata[1]:.3f}",
+                customdata=dft[['Tijd', 'xT']]
             ))
+            
+            # LIJNEN (Voor passes of runs)
+            if show_lines:
+                # We moeten per rij een lijn trekken. Plotly doet dit het snelst door None toe te voegen tussen lijnen
+                # Maar voor performance doen we het hier alleen als er < 500 events zijn
+                if len(dft) < 500:
+                    for _, row in dft.iterrows():
+                        if pd.notnull(row['x_end']) and pd.notnull(row['y_end']):
+                            fig.add_trace(go.Scatter(
+                                x=[row['x_start'], row['x_end']],
+                                y=[row['y_start'], row['y_end']],
+                                mode='lines',
+                                line=dict(color=color, width=1),
+                                opacity=0.4,
+                                showlegend=False,
+                                hoverinfo='skip'
+                            ))
+                            # Eventueel een pijlpunt (annotation) is zwaar voor de browser bij veel data
+                else:
+                    st.caption(f"⚠️ Te veel events ({len(dft)}) om lijnen te tekenen voor {team}. Filter meer.")
 
-        # Layout settings
         fig.update_layout(
-            width=800, height=600,
+            width=800, height=650,
             xaxis=dict(range=[-5, 105], showgrid=False, visible=False),
             yaxis=dict(range=[-5, 105], showgrid=False, visible=False),
-            plot_bgcolor='white',
-            title=f"Locaties: {', '.join(sel_actions_map)}"
+            plot_bgcolor='rgba(0,0,0,0)',
+            margin=dict(l=10, r=10, t=30, b=10)
         )
-        
         st.plotly_chart(fig, use_container_width=True)
+        
     else:
-        st.warning("Geen events gevonden met deze filters.")
+        st.info("Geen events met deze filters.")
 
 # -----------------------------------------------------------------------------
 # 5. RAW DATA
