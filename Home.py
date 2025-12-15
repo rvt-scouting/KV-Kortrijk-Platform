@@ -109,6 +109,14 @@ else:
     if modules:
         pages_dict["Scouting Platform"] = modules
 
+    # NOODOPLOSSING OM TE TESTEN:
+    # Voeg een dummy pagina toe aan 'Algemeen' zodat er altijd minstens 2 pagina's zijn.
+    # Hierdoor MOET het menu wel verschijnen.
+    def test_page():
+        st.write("Dit is een test.")
+        
+    pg_test = st.Page(test_page, title="Test Pagina", icon="🔧")
+    pages_dict["Algemeen"].append(pg_test)
     # --- D. START NAVIGATIE ---
     pg = st.navigation(pages_dict)
     pg.run()
