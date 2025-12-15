@@ -55,9 +55,14 @@ pg_home = st.Page(welcome, title="Home", icon="🏠")
 pg_test = st.Page(test_page_func, title="Systeem Test", icon="🛠️")
 
 # Zorg dat deze bestanden echt bestaan in 'views/'!
-pg_scout = st.Page("views/4_📝_Scouting.py", title="Scouting", icon="📝") 
+pg_scout = st.Page("views/4_📝_Scouting.py", title="Scouting Input", icon="📝") 
 pg_disc = st.Page("views/5_🔎_Discover.py", title="Discover", icon="🔎")
 pg_offer = st.Page("views/6_📥_Aangeboden.py", title="Aangeboden", icon="📥")
+
+# --- NIEUW: HET DASHBOARD ---
+pg_dashboard = st.Page("views/7_📊_Scouting_Overzicht.py", title="Scouting Dashboard", icon="📊")
+# ----------------------------
+
 pg_match = st.Page("views/3_📊_Wedstrijden.py", title="Wedstrijden", icon="📊")
 pg_coach = st.Page("views/2_👔_Coaches.py", title="Coaches", icon="👔")
 pg_player = st.Page("views/1_⚽_Spelers_en_Teams.py", title="Spelers", icon="⚽")
@@ -82,7 +87,12 @@ else:
 
     # GROEP 2: MODULES
     modules = []
-    if lvl >= 1: modules.extend([pg_scout, pg_offer, pg_disc])
+    
+    # Ik heb pg_dashboard hier toegevoegd bij level 1, zodat iedereen het kan zien.
+    # Als enkel managers dit mogen zien, verplaats het dan naar lvl >= 2 of 3.
+    if lvl >= 1: 
+        modules.extend([pg_scout, pg_offer, pg_dashboard, pg_disc]) # <--- pg_dashboard TOEGEVOEGD
+        
     if lvl >= 2: modules.extend([pg_match, pg_coach])
     if lvl >= 3: modules.extend([pg_player])
 
