@@ -72,28 +72,43 @@ else:
     pg_discover = st.Page("pages/5_🔎_Discover.py", title="Discover", icon="🔎")
     pg_aangeboden = st.Page("pages/6_📥_Aangeboden.py", title="Aangeboden", icon="📥")
 
-    # --- B. BEPAAL WIE WAT MAG ZIEN ---
+# --- B. BEPAAL WIE WAT MAG ZIEN (MET SECTIES) ---
     user_level = st.session_state.user_info.get('toegangsniveau', 0)
     
-    my_pages = [pg_welcome] # Iedereen heeft home
+    # Debugging: Zet dit tijdelijk aan als je twijfelt over je niveau
+    # st.sidebar.write(f"Debug Niveau: {user_level}")
 
-    # NIVEAU 1: BASIS SCOUT (Alleen invoer & Discover)
-    if user_level >= 1:
-        my_pages.extend([pg_scouting, pg_aangeboden, pg_discover])
+    # We bouwen een Dictionary (Woordenboek) voor secties in het menu
+    pages_dict = {}
+
+    # 1. De Algemene sectie (heeft iedereen)
+    pages_dict["Algemeen"] = [pg_welcome]
+
+    # 2. Modules verzamelen op basis van niveau
+    modules = []
     
-    # NIVEAU 2: ANALIST (Ook wedstrijden en coaches)
+    # NIVEAU 1: BASIS (Scouts)
+    if user_level >= 1:
+        modules.extend([pg_scouting, pg_aangeboden, pg_discover])
+    
+    # NIVEAU 2: ANALIST
     if user_level >= 2:
-        my_pages.extend([pg_wedstrijden, pg_coaches])
+        modules.extend([pg_wedstrijden, pg_coaches])
 
-    # NIVEAU 3: DIRECTIE / HOOFDSCOUT (Alles, inclusief de dure data modules)
+    # NIVEAU 3: DIRECTIE
     if user_level >= 3:
-        my_pages.extend([pg_spelers])
+        modules.extend([pg_spelers])
+
+    # Als er modules zijn, voegen we die toe als sectie 'Scouting Platform'
+    if modules:
+        pages_dict["Scouting Platform"] = modules
 
     # --- C. START DE NAVIGATIE ---
-    pg = st.navigation(my_pages)
+    # Streamlit snapt nu dat het groepen zijn en zal ze netjes tonen
+    pg = st.navigation(pages_dict)
     pg.run()
     
-    # Sidebar footer met uitlogknop
+    # Sidebar footer
     with st.sidebar:
         st.divider()
         st.write(f"👤 **{st.session_state.user_info['naam']}**")
