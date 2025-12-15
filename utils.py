@@ -112,3 +112,25 @@ def get_config_for_position(db_position, config_dict):
     elif pos in ["RIGHT_WINGER", "LEFT_WINGER"]: return config_dict.get('winger')
     elif pos in ["CENTER_FORWARD", "STRIKER"]: return config_dict.get('center_forward')
     return None
+# -----------------------------------------------------------------------------
+# 4. AUTHENTICATIE & LOGIN
+# -----------------------------------------------------------------------------
+def check_login(email, password):
+    """
+    Checkt of gebruiker bestaat in scouting.scouts en of wachtwoord klopt.
+    Geeft de gebruikersinfo terug (dict) of None.
+    """
+    # Let op: In productie moet je wachtwoorden HASHEN (met bcrypt). 
+    # Nu doen we even plain-text vergelijking omdat het zo in je DB staat.
+    query = """
+        SELECT id, naam, rol_in_club, toegangsniveau 
+        FROM scouting.scouts 
+        WHERE email = %s AND wachtwoord = %s AND actief = TRUE
+    """
+    df = run_query(query, params=(email, password))
+    
+    if not df.empty:
+        # Zet de eerste rij om naar een dictionary (gemakkelijk te gebruiken)
+        return df.iloc[0].to_dict()
+    else:
+        return None
