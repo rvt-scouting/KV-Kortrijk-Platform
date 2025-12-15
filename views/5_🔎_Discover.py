@@ -19,6 +19,7 @@ season_query = "SELECT DISTINCT season FROM public.iterations ORDER BY season DE
 try:
     df_seasons = run_query(season_query)
     seasons_list = df_seasons['season'].tolist()
+    
     # Sessie status behouden als die er is
     idx = 0
     if "sb_season" in st.session_state and st.session_state.sb_season in seasons_list:
@@ -29,8 +30,7 @@ except Exception as e:
     st.error("Kon seizoenen niet laden.")
     st.stop()
 
-# B. Competitie (Optioneel / Multiselect logic)
-# We halen alle iteraties op voor dit seizoen
+# B. Competitie (Optioneel)
 iter_query = """
     SELECT id, "competitionName" 
     FROM public.iterations 
@@ -43,23 +43,18 @@ if df_iters.empty:
     st.warning("Geen competities gevonden voor dit seizoen.")
     st.stop()
 
-# We maken een lijst met "Alle" als eerste optie
+# Opties: "Alle Competities" + specifieke competities
 comp_options = ["Alle Competities"] + df_iters['competitionName'].tolist()
 selected_comp_name = st.sidebar.selectbox("Competitie:", comp_options)
 
-# C. Bepaal welke IDs we moeten ophalen
-target_ids = []
+# C. Bepaal welke IDs we ophalen
 if selected_comp_name == "Alle Competities":
-    # Pak alle IDs van dit seizoen
-    target_ids = df_iters['id'].tolist()
-    st.sidebar.caption(f"Je kijkt nu naar data van {len(target_ids)} competities.")
+    target_ids = df_iters['id'].tolist() # Alles van dit seizoen
+    st.sidebar.caption(f"Data van {len(target_ids)} competities.")
 else:
-    # Pak enkel de ID van de gekozen competitie
     target_ids = df_iters[df_iters['competitionName'] == selected_comp_name]['id'].tolist()
 
-# Zorg dat ids strings zijn voor de tuple (nodig voor SQL IN clause)
 target_ids_tuple = tuple(str(x) for x in target_ids)
-
 st.sidebar.divider()
 
 # -----------------------------------------------------------------------------
@@ -67,8 +62,7 @@ st.sidebar.divider()
 # -----------------------------------------------------------------------------
 @st.cache_data
 def get_analysis_data(ids_tuple):
-    # We joinen nu ook iterations om de competitienaam te hebben in de data
-    # Let op de syntax voor IN %s in python/sql
+    # We joinen iterations om de competitienaam te hebben
     query = """
         SELECT 
             p.commonname as "Naam", 
@@ -82,38 +76,31 @@ def get_analysis_data(ids_tuple):
     """
     return run_query(query, params=(ids_tuple,))
 
-# Ophalen
 df = get_analysis_data(target_ids_tuple)
 
 if df.empty:
-    st.warning("Geen data gevonden voor de geselecteerde criteria.")
+    st.warning("Geen data gevonden.")
     st.stop()
 
 # -----------------------------------------------------------------------------
 # 4. GRAFIEK INSTELLINGEN
 # -----------------------------------------------------------------------------
-# Automatisch numerieke kolommen vinden (exclusief IDs)
+# Filter kolommen (geen IDs of tekst)
 exclude_cols = ['playerId', 'squadId', 'iterationId', 'Naam', 'Team', 'Competitie', 'position', 'birthdate']
 numeric_cols = [c for c in df.columns if c not in exclude_cols and pd.api.types.is_numeric_dtype(df[c])]
 numeric_cols.sort()
 
-# Layout met kolommen
-c1, c2, c3, c4 = st.columns(4)
+# We verdelen de ruimte nu in 3 kolommen i.p.v. 4
+c1, c2, c3 = st.columns(3)
 
 with c1:
     st.markdown("##### 📍 Assen")
     x_axis = st.selectbox("X-As", numeric_cols, index=0 if len(numeric_cols) > 0 else 0)
-    # Probeer slim een andere Y te kiezen dan X
+    # Slimme selectie voor Y (probeer een andere dan X te kiezen)
     def_y = 1 if len(numeric_cols) > 1 else 0
     y_axis = st.selectbox("Y-As", numeric_cols, index=def_y)
 
 with c2:
-    st.markdown("##### 🎨 Stijl")
-    # Kleur optie toevoegen
-    color_options = ["Team", "position", "Competitie"]
-    color_by = st.selectbox("Kleur bolletjes op basis van:", color_options, index=0)
-
-with c3:
     st.markdown("##### 🕵️ Filter Positie")
     if 'position' in df.columns:
         positions = ["Alle"] + sorted(df['position'].dropna().unique().tolist())
@@ -121,10 +108,9 @@ with c3:
         if sel_pos != "Alle":
             df = df[df['position'] == sel_pos]
 
-with c4:
+with c3:
     st.markdown("##### 🛡️ Filter Teams")
     all_teams = sorted(df['Team'].dropna().unique().tolist())
-    # Standaard niets geselecteerd = alles tonen
     sel_teams = st.multiselect("Specifieke teams (leeg = alles):", all_teams)
     if sel_teams:
         df = df[df['Team'].isin(sel_teams)]
@@ -144,12 +130,12 @@ if not df.empty:
         df, 
         x=x_axis, 
         y=y_axis, 
-        color=color_by,  # Dynamische kleur
+        color='Team',  # Standaard altijd kleuren op Team
         hover_data=['Naam', 'Team', 'Competitie', 'position'], 
         title=chart_title,
         height=700,
         template="plotly_white",
-        text='Naam' if len(df) < 50 else None # Alleen namen tonen als er weinig punten zijn
+        text='Naam' if len(df) < 50 else None # Namen tonen bij kleine selecties
     )
     
     # Styling
@@ -157,9 +143,6 @@ if not df.empty:
         marker=dict(size=12, line=dict(width=1, color='DarkSlateGrey')),
         textposition='top center'
     )
-    
-    # Als er veel teams zijn, de legenda misschien verbergen of aanpassen?
-    # Voor nu laten we hem staan, Plotly handelt dit best goed af.
     
     st.plotly_chart(fig, use_container_width=True)
 
