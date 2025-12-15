@@ -89,7 +89,8 @@ def get_match_data_optimized(match_id):
             e."distanceToOpponent",
             e."phase",
             e."pressure",
-            e."periodId",  -- NIEUW: Voor filter op helft
+            e."periodId",
+            e."pressingPlayerId", -- NIEUW
             
             CAST(e."start" -> 'coordinates' ->> 'x' AS FLOAT) as x_start,
             CAST(e."start" -> 'coordinates' ->> 'y' AS FLOAT) as y_start,
@@ -118,16 +119,29 @@ def get_match_data_optimized(match_id):
                 squad_map = dict(zip(df_sq['id'].astype(str), df_sq['name']))
     df_ev['Team'] = df_ev['squadId'].astype(str).map(squad_map).fillna('Onbekend')
 
-    # Spelers Map
-    player_ids = [str(pid) for pid in df_ev['player_id_raw'].dropna().unique().tolist() if str(pid).isdigit()]
+    # Spelers Map (Nu voor BEIDE: uitvoerend én pressing speler)
+    # We verzamelen alle IDs in één lijst om efficiënt te queryen
+    p_ids_1 = df_ev['player_id_raw'].dropna().unique().tolist()
+    p_ids_2 = df_ev['pressingPlayerId'].dropna().unique().tolist()
+    
+    # Combineer en maak uniek
+    all_p_ids = list(set(p_ids_1 + p_ids_2))
+    
+    # Filter op digits
+    all_p_ids = [str(pid) for pid in all_p_ids if str(pid).isdigit()]
+    
     player_map = {}
-    if player_ids:
-        p_ids_formatted = ", ".join(f"'{x}'" for x in player_ids)
+    if all_p_ids:
+        p_ids_formatted = ", ".join(f"'{x}'" for x in all_p_ids)
         if p_ids_formatted:
             df_pl = run_query(f"SELECT id, commonname FROM public.players WHERE id IN ({p_ids_formatted})")
             if not df_pl.empty:
                 player_map = dict(zip(df_pl['id'].astype(str), df_pl['commonname']))
+    
+    # Map de namen
     df_ev['Speler'] = df_ev['player_id_raw'].astype(str).map(player_map).fillna('Onbekend')
+    # Map de pressing speler naam, laat leeg (of '-') als er geen is
+    df_ev['PressingSpeler'] = df_ev['pressingPlayerId'].astype(str).map(player_map).fillna('-')
 
     return df_ev
 
@@ -266,7 +280,7 @@ with tab2:
     def_acts = [x for x in ['SHOT','GOAL'] if x in acts]
     sel_acts = c2.multiselect("Acties", acts, default=def_acts, key="pm_acts")
     
-    # PERIODE FILTER (NIEUW)
+    # PERIODE FILTER
     periods = sorted(df_events['periodId'].astype(str).unique())
     sel_period = c3.multiselect("Periode / Helft", periods, default=periods, key="pm_period")
     
@@ -303,16 +317,13 @@ with tab2:
     color_mode = v_c2.radio("Kleur op basis van:", ["Team", "Resultaat (Succes/Fail)"], horizontal=True, key="pm_color")
 
     # FILTER DATA
-    # Begin met basis
     df_m = df_events[
         (df_events['Team'].isin(sel_teams)) & 
         (df_events['action_clean'].isin(sel_acts))
     ].copy() 
 
-    # Pas periode filter toe
     if sel_period: df_m = df_m[df_m['periodId'].astype(str).isin(sel_period)]
     
-    # Pas extra filters toe
     if sel_dist: df_m = df_m[df_m['distanceToOpponent'].isin(sel_dist)]
     if sel_pres: df_m = df_m[df_m['pressure'].isin(sel_pres)]
     if sel_phase: df_m = df_m[df_m['phase'].isin(sel_phase)]
@@ -330,7 +341,6 @@ with tab2:
         fig.add_shape(type="rect", x0=36, y0=-20.16, x1=52.5, y1=20.16, line=dict(color="white"))
         fig.add_shape(type="rect", x0=46.5, y0=-9.16, x1=52.5, y1=9.16, line=dict(color="white"))
 
-        # Bepaal groepen
         if color_mode == "Team":
             groups = sel_teams
         else:
@@ -349,14 +359,15 @@ with tab2:
 
             if d.empty: continue
 
-            # MARKERS
+            # MARKERS (Met Pressing in Tooltip)
             fig.add_trace(go.Scatter(
                 x=d['x_start'], y=d['y_start'], 
                 mode='markers', name=name_lbl,
                 marker=dict(color=color, size=8, line=dict(width=1,color='black')),
                 text=d['Speler'] + " (" + d['action'] + ") [" + d['result_clean'] + "]",
-                hovertemplate="%{text}<br>DistOpp: %{customdata[1]}<br>Press: %{customdata[2]}",
-                customdata=d[['TijdString', 'distanceToOpponent', 'pressure']]
+                # HIERONDER: customdata[3] is PressingSpeler
+                hovertemplate="%{text}<br>DistOpp: %{customdata[1]}<br>Press: %{customdata[2]}<br>Pressing Speler: %{customdata[3]}",
+                customdata=d[['TijdString', 'distanceToOpponent', 'pressure', 'PressingSpeler']]
             ))
             
             # LIJNEN
@@ -438,7 +449,7 @@ with tab3:
 # TAB 4: RAW
 # -----------------------------------------------------------------------------
 with tab4:
-    cols = ['Volgorde', 'periodId', 'Minuut', 'Team', 'Speler', 'action', 'result', 'distanceToOpponent', 'pressure', 'phase']
+    cols = ['Volgorde', 'periodId', 'Minuut', 'Team', 'Speler', 'PressingSpeler', 'action', 'result', 'distanceToOpponent', 'pressure', 'phase']
     # Filter only existing columns
     existing_cols = [c for c in cols if c in df_events.columns]
     st.dataframe(df_events[existing_cols], use_container_width=True)
