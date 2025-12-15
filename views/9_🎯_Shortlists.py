@@ -7,7 +7,7 @@ st.set_page_config(page_title="Shortlist Manager", page_icon="🎯", layout="wid
 if 'user_info' not in st.session_state or not st.session_state.user_info:
     st.warning("⚠️ Log in AUB."); st.stop()
 
-current_user = st.session_state.user_info.get('naam', 'Onbekend')
+current_user_name = st.session_state.user_info.get('naam', 'Onbekend')
 current_user_id = st.session_state.user_info.get('id')
 
 # Haal niveau op
@@ -16,7 +16,7 @@ try:
 except:
     lvl = 0
 
-st.title("🎯 Shortlists")
+st.title("🎯 Shortlists Manager")
 
 # -----------------------------------------------------------------------------
 # 1. HELPER: OPSLAAN
@@ -42,31 +42,64 @@ def execute_command(query, params=None):
 c1, c2 = st.columns([3, 1])
 
 with c1:
-    # Haal lijsten op
+    # Haal lijsten op + Eigenaar naam
     try:
-        df_lists = run_query("SELECT id, naam FROM scouting.shortlists ORDER BY id")
+        q_lists = """
+            SELECT s.id, s.naam, u.naam as eigenaar 
+            FROM scouting.shortlists s
+            LEFT JOIN scouting.gebruikers u ON s.eigenaar_id = u.id
+            ORDER BY s.id
+        """
+        df_lists = run_query(q_lists)
+        
         if not df_lists.empty:
-            list_opts = {row['naam']: row['id'] for _, row in df_lists.iterrows()}
-            selected_list_label = st.selectbox("📂 Selecteer Shortlist:", list(list_opts.keys()))
-            selected_list_id = list_opts[selected_list_label]
+            # We tonen nu ook van wie de lijst is in de dropdown
+            list_opts = {f"{row['naam']} (Eigenaar: {row['eigenaar'] or 'Onbekend'})": row['id'] for _, row in df_lists.iterrows()}
+            selected_label = st.selectbox("📂 Selecteer Shortlist:", list(list_opts.keys()))
+            selected_list_id = list_opts[selected_label]
+            # Haal de pure naam eruit voor de titel straks
+            selected_list_pure_name = selected_label.split(" (")[0]
         else:
             st.info("Nog geen shortlists beschikbaar.")
             selected_list_id = None
-    except:
-        st.error("Kon shortlists niet laden.")
+            selected_list_pure_name = ""
+    except Exception as e:
+        st.error(f"Kon shortlists niet laden: {e}")
         selected_list_id = None
 
 with c2:
     # BEVEILIGING: Alleen Niveau 3 (Manager/Admin) mag nieuwe lijsten maken
     if lvl >= 3:
         with st.popover("➕ Nieuwe Lijst Maken"):
-            st.write("**Beheerder Functie**")
-            new_list_name = st.text_input("Naam nieuwe lijst")
+            st.write("**Nieuwe Lijst Configureren**")
+            new_list_name = st.text_input("Naam lijst", placeholder="bv. Keepers Zomer '25")
+            
+            # --- NIEUW: KIES EIGENAAR ---
+            # Haal alle gebruikers op om uit te kiezen
+            try:
+                users_df = run_query("SELECT id, naam FROM scouting.gebruikers WHERE actief = true ORDER BY naam")
+                if not users_df.empty:
+                    user_dict = {row['naam']: row['id'] for _, row in users_df.iterrows()}
+                    
+                    # Probeer standaard de huidige gebruiker te selecteren
+                    default_idx = 0
+                    if current_user_name in user_dict:
+                        default_idx = list(user_dict.keys()).index(current_user_name)
+                    
+                    assigned_owner_name = st.selectbox("Toewijzen aan:", list(user_dict.keys()), index=default_idx)
+                    assigned_owner_id = user_dict[assigned_owner_name]
+                else:
+                    assigned_owner_id = current_user_id # Fallback
+            except:
+                assigned_owner_id = current_user_id
+
             if st.button("Aanmaken"):
                 if new_list_name:
                     q = "INSERT INTO scouting.shortlists (naam, eigenaar_id, aangemaakt_op) VALUES (%s, %s, NOW())"
-                    if execute_command(q, (new_list_name, current_user_id)):
-                        st.success("Gemaakt! Ververs de pagina.")
+                    # We gebruiken nu assigned_owner_id
+                    if execute_command(q, (new_list_name, assigned_owner_id)):
+                        st.success(f"Lijst '{new_list_name}' gemaakt voor {assigned_owner_name}!")
+                        st.cache_data.clear()
                         st.rerun()
 
 st.divider()
@@ -75,10 +108,10 @@ if selected_list_id:
     tab1, tab2 = st.tabs(["➕ Speler Toevoegen", "📋 Lijst Bekijken"])
 
     # =========================================================================
-    # TAB 1: SPELER TOEVOEGEN (Beschikbaar voor Scouts & Managers)
+    # TAB 1: SPELER TOEVOEGEN
     # =========================================================================
     with tab1:
-        st.subheader(f"Speler toevoegen aan: {selected_list_label}")
+        st.subheader(f"Toevoegen aan: {selected_list_pure_name}")
         
         col_search, col_form = st.columns([1, 2])
         
@@ -144,7 +177,7 @@ if selected_list_id:
                                 (shortlist_id, player_id, custom_naam, priority, notities, added_by)
                                 VALUES (%s, %s, %s, %s, %s, %s)
                             """
-                            if execute_command(q_ins, (selected_list_id, final_pid, final_custom, prio, notes, current_user)):
+                            if execute_command(q_ins, (selected_list_id, final_pid, final_custom, prio, notes, current_user_name)):
                                 st.success("Toegevoegd!")
                                 st.cache_data.clear()
                     else:
@@ -177,9 +210,9 @@ if selected_list_id:
         
         if not df_entries.empty:
             
-            # Scouts mogen kijken, maar Managers (Niveau 3) mogen ook snel bewerken
+            # Managers (Niveau 3) mogen bewerken
             if lvl >= 3:
-                st.info("💡 Als Manager kun je de lijst hieronder direct bewerken.")
+                st.info("💡 Bewerk prioriteit of notities direct in de tabel.")
                 edited_df = st.data_editor(
                     df_entries,
                     use_container_width=True,
@@ -217,7 +250,7 @@ if selected_list_id:
                             st.cache_data.clear()
                             st.rerun()
             else:
-                # NIVEAU 1 (Scouts) ziet alleen de statische tabel
+                # NIVEAU 1 (Scouts)
                 def color_prio(val):
                     c = "#c0392b" if val == "High" else "#f39c12" if val == "Medium" else "#27ae60"
                     return f'color: {c}; font-weight: bold'
@@ -228,6 +261,5 @@ if selected_list_id:
                     hide_index=True,
                     column_config={"id": None}
                 )
-
         else:
             st.info("Deze lijst is nog leeg.")
