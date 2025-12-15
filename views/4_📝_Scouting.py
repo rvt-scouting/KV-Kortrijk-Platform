@@ -8,36 +8,31 @@ st.set_page_config(page_title="Live Scouting", page_icon="📝", layout="wide")
 # 1. HULPFUNCTIES & SETUP
 # -----------------------------------------------------------------------------
 
-# Helper om opties op te halen (cached voor snelheid)
 @st.cache_data
 def get_options_data(table_name):
     """ Haalt id en label op van een optie tabel """
-    # We proberen slim te gokken welke kolom de naam bevat
     try:
+        # Let op: Zorg dat je gebruiker SELECT rechten heeft op deze tabellen!
         df = run_query(f"SELECT * FROM scouting.{table_name}")
         if df.empty: return pd.DataFrame()
         
-        # Bepaal label kolom (naam, label, code, status...)
         cols = df.columns.tolist()
+        # Slimme detectie van de label kolom
         label_col = next((c for c in cols if c in ['naam', 'label', 'status', 'omschrijving', 'code']), cols[1] if len(cols) > 1 else cols[0])
         value_col = 'id' if 'id' in cols else cols[0]
         
         return df[[value_col, label_col]].rename(columns={value_col: 'value', label_col: 'label'})
     except Exception as e:
-        # st.error(f"Fout laden {table_name}: {e}") # Eventueel aanzetten voor debug
         return pd.DataFrame()
 
 def save_report_to_db(data):
-    """ 
-    Slaat rapport op.
-    Checkt eerst of er al een rapport is voor deze combinatie (Upsert logica).
-    """
+    """ Slaat rapport op (Upsert: Update if exists, else Insert) """
     conn = None
     try:
         conn = init_connection()
         cur = conn.cursor()
         
-        # 1. Check of rapport bestaat
+        # Check bestaand rapport
         check_q = """
             SELECT id FROM scouting.rapporten 
             WHERE scout_id = %s AND speler_id = %s AND wedstrijd_id = %s
@@ -50,14 +45,9 @@ def save_report_to_db(data):
             report_id = existing[0]
             update_q = """
                 UPDATE scouting.rapporten SET
-                    positie_gespeeld = %s,
-                    profiel_code = %s,
-                    advies = %s,
-                    beoordeling = %s,
-                    rapport_tekst = %s,
-                    gouden_busser = %s,
-                    shortlist_id = %s,
-                    aangemaakt_op = NOW()
+                    positie_gespeeld = %s, profiel_code = %s, advies = %s,
+                    beoordeling = %s, rapport_tekst = %s, gouden_busser = %s,
+                    shortlist_id = %s, aangemaakt_op = NOW()
                 WHERE id = %s
             """
             cur.execute(update_q, (
@@ -102,42 +92,61 @@ current_scout_id = st.session_state.user_info.get('id')
 current_scout_name = st.session_state.user_info.get('naam', 'Onbekend')
 
 # -----------------------------------------------------------------------------
-# 2. WEDSTRIJD SELECTIE
+# 2. WEDSTRIJD SELECTIE (MET COMPETITIE FILTER)
 # -----------------------------------------------------------------------------
 st.title("📝 Live Match Scouting")
 
-# Haal opties op (voor we beginnen)
+# Haal opties op
 opties_posities = get_options_data('opties_posities')
 opties_profielen = get_options_data('opties_profielen')
 opties_advies = get_options_data('opties_advies')
 opties_shortlists = get_options_data('shortlists')
 
-# Sidebar Filters
+st.sidebar.header("Selecteer Wedstrijd")
+
+# A. Seizoen
 try:
     df_seasons = run_query("SELECT DISTINCT season FROM public.iterations ORDER BY season DESC")
     seasons = df_seasons['season'].tolist()
-    sel_season = st.sidebar.selectbox("Seizoen", seasons)
-except: st.error("DB Connectie fout"); st.stop()
+    sel_season = st.sidebar.selectbox("1. Seizoen", seasons)
+except: st.error("DB Connectie fout bij seizoenen"); st.stop()
 
-match_query = """
-    SELECT m.id, m."scheduledDate", m."iterationId", h.name as home, a.name as away
-    FROM public.matches m
-    JOIN public.squads h ON m."homeSquadId" = h.id
-    JOIN public.squads a ON m."awaySquadId" = a.id
-    WHERE m."iterationId" IN (SELECT id FROM public.iterations WHERE season = %s)
-    ORDER BY m."scheduledDate" DESC
-"""
-df_matches = run_query(match_query, params=(sel_season,))
+# B. Competitie (NIEUW)
+if sel_season:
+    comp_q = 'SELECT DISTINCT "competitionName" FROM public.iterations WHERE season = %s ORDER BY "competitionName"'
+    df_comps = run_query(comp_q, params=(sel_season,))
+    comps = df_comps['competitionName'].tolist()
+    sel_comp = st.sidebar.selectbox("2. Competitie", comps)
+else:
+    st.stop()
 
-if df_matches.empty:
-    st.info("Geen wedstrijden."); st.stop()
+# C. Wedstrijd (Gefilterd op Seizoen EN Competitie)
+if sel_season and sel_comp:
+    match_query = """
+        SELECT m.id, m."scheduledDate", m."iterationId", h.name as home, a.name as away
+        FROM public.matches m
+        JOIN public.squads h ON m."homeSquadId" = h.id
+        JOIN public.squads a ON m."awaySquadId" = a.id
+        WHERE m."iterationId" IN (
+            SELECT id FROM public.iterations 
+            WHERE season = %s AND "competitionName" = %s
+        )
+        ORDER BY m."scheduledDate" DESC
+    """
+    df_matches = run_query(match_query, params=(sel_season, sel_comp))
+    
+    if df_matches.empty:
+        st.info("Geen wedstrijden gevonden voor deze competitie.")
+        st.stop()
 
-# Match Selector
-match_opts = {f"{r['home']} vs {r['away']} ({r['scheduledDate'].strftime('%d-%m')})": r for _, r in df_matches.iterrows()}
-sel_match_label = st.sidebar.selectbox("Selecteer Wedstrijd", list(match_opts.keys()))
-sel_match_row = match_opts[sel_match_label]
-selected_match_id = sel_match_row['id']
-selected_comp_id = sel_match_row['iterationId']
+    match_opts = {f"{r['home']} vs {r['away']} ({r['scheduledDate'].strftime('%d-%m')})": r for _, r in df_matches.iterrows()}
+    sel_match_label = st.sidebar.selectbox("3. Wedstrijd", list(match_opts.keys()))
+    
+    sel_match_row = match_opts[sel_match_label]
+    selected_match_id = sel_match_row['id']
+    selected_comp_id = sel_match_row['iterationId']
+else:
+    st.stop()
 
 st.sidebar.divider()
 st.sidebar.write(f"👤 **Scout:** {current_scout_name}")
@@ -197,10 +206,9 @@ with col_editor:
         p_row = df_players[df_players['player_id'] == st.session_state.active_player_id].iloc[0]
         st.subheader(f"{p_row['commonname']}")
         
-        # Unieke sleutel
         draft_key = f"{selected_match_id}_{st.session_state.active_player_id}_{current_scout_id}"
         
-        # 1. Initieer draft als die er nog niet is (haal uit DB of maak leeg)
+        # Initieer draft als die er nog niet is
         if draft_key not in st.session_state.scout_drafts:
             # Check DB
             db_q = "SELECT * FROM scouting.rapporten WHERE scout_id = %s AND speler_id = %s AND wedstrijd_id = %s"
@@ -225,54 +233,49 @@ with col_editor:
         
         draft = st.session_state.scout_drafts[draft_key]
 
-        # --- HET FORMULIER ---
+        # --- FORMULIER ---
         c1, c2 = st.columns(2)
+        
+        # Helper index
+        def get_idx(val, opts): return opts.index(val) if val in opts else 0
+
         with c1:
-            # Positie Dropdown
+            # Positie
             pos_opts = opties_posities['value'].tolist() if not opties_posities.empty else []
             pos_lbls = opties_posities['label'].tolist() if not opties_posities.empty else []
-            
-            # Helper om index te vinden
-            def get_idx(val, opts): 
-                return opts.index(val) if val in opts else 0
-                
             new_pos = st.selectbox("Positie Gespeeld", pos_opts, index=get_idx(draft['positie'], pos_opts), format_func=lambda x: pos_lbls[pos_opts.index(x)] if x in pos_opts else x, key="inp_pos")
             
             # Beoordeling
             new_rating = st.slider("Beoordeling (1-10)", 1, 10, draft["rating"], key="inp_rate")
 
         with c2:
-            # Advies Dropdown
+            # Advies
             adv_opts = opties_advies['value'].tolist() if not opties_advies.empty else []
             adv_lbls = opties_advies['label'].tolist() if not opties_advies.empty else []
             new_adv = st.selectbox("Advies", adv_opts, index=get_idx(draft['advies'], adv_opts), format_func=lambda x: adv_lbls[adv_opts.index(x)] if x in adv_opts else x, key="inp_adv")
 
-            # Profiel Dropdown
+            # Profiel
             prof_opts = opties_profielen['value'].tolist() if not opties_profielen.empty else []
             prof_lbls = opties_profielen['label'].tolist() if not opties_profielen.empty else []
             new_prof = st.selectbox("Profiel Type", prof_opts, index=get_idx(draft['profiel'], prof_opts), format_func=lambda x: prof_lbls[prof_opts.index(x)] if x in prof_opts else x, key="inp_prof")
 
-        # Tekst
         new_tekst = st.text_area("Rapportage (Plus/Min/Samenvatting)", draft["tekst"], height=200, key="inp_txt")
         
-        # Extra's
         ce1, ce2 = st.columns(2)
         with ce1:
-            new_gouden = st.checkbox("🏆 Gouden Busser (Uitblinker)", draft["gouden"], key="inp_gold")
+            new_gouden = st.checkbox("🏆 Gouden Busser", draft["gouden"], key="inp_gold")
         with ce2:
-            # Shortlist Dropdown (Optioneel)
+            # Shortlist
             sl_opts = [None] + (opties_shortlists['value'].tolist() if not opties_shortlists.empty else [])
             sl_lbls = ["Geen"] + (opties_shortlists['label'].tolist() if not opties_shortlists.empty else [])
             
-            # Format func moet safe zijn voor None
             def fmt_sl(x):
                 if x is None: return "Geen"
                 if x in sl_opts: return sl_lbls[sl_opts.index(x)]
                 return str(x)
-                
             new_sl = st.selectbox("Zet op Shortlist", sl_opts, index=sl_opts.index(draft['shortlist']) if draft['shortlist'] in sl_opts else 0, format_func=fmt_sl, key="inp_sl")
 
-        # UPDATE DRAFT
+        # Update Draft
         st.session_state.scout_drafts[draft_key] = {
             "positie": new_pos, "profiel": new_prof, "advies": new_adv,
             "rating": new_rating, "tekst": new_tekst, "gouden": new_gouden, "shortlist": new_sl
@@ -293,7 +296,6 @@ with col_editor:
                 "gouden_busser": new_gouden,
                 "shortlist_id": new_sl
             }
-            
             if save_report_to_db(save_data):
                 st.success(f"Rapport voor {p_row['commonname']} opgeslagen!")
                 st.balloons()
