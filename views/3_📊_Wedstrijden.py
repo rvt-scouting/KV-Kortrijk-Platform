@@ -19,20 +19,14 @@ def normalize_id(val):
         return str(val).strip()
 
 def parse_gametime_to_min(t_str):
-    """
-    Zet 'MM:SS.ms' (bv. '53:31.7141') om naar minuten (float).
-    Gebruikt pure string parsing, omdat gameTimeInSec onbetrouwbaar bleek.
-    """
+    """Zet 'MM:SS.ms' om naar minuten (float)."""
     try:
         if not isinstance(t_str, str): return 0.0
-        # Pak het gedeelte voor de punt (eventuele milliseconden strippen)
         main_part = t_str.split('.')[0] 
         parts = main_part.split(':')
         if len(parts) >= 2:
-            # Minuten + Seconden/60
             return float(parts[0]) + float(parts[1])/60.0
         elif len(parts) == 1:
-            # Alleen minuten? Of seconden? Gok minuten
             return float(parts[0])
         return 0.0
     except:
@@ -43,7 +37,6 @@ def parse_gametime_to_min(t_str):
 # -----------------------------------------------------------------------------
 st.sidebar.header("🔍 Wedstrijd Selectie")
 
-# A. Seizoen & Competitie
 try:
     df_seasons = run_query("SELECT DISTINCT season FROM public.iterations ORDER BY season DESC")
     seasons = df_seasons['season'].tolist()
@@ -60,7 +53,6 @@ if sel_season:
     sel_comp = st.sidebar.selectbox("Competitie", comps)
 else: st.stop()
 
-# B. Wedstrijd
 if sel_season and sel_comp:
     q_matches = """
         SELECT m.id, m."scheduledDate", h.name as home, a.name as away, 
@@ -93,7 +85,6 @@ st.caption(f"Datum: {match_row['scheduledDate'].strftime('%d-%m-%Y %H:%M')} | Ma
 # -----------------------------------------------------------------------------
 @st.cache_data
 def get_match_data_optimized(match_id):
-    # STAP 1: Events
     q_events = """
         SELECT 
             e.index as "Volgorde",
@@ -102,10 +93,7 @@ def get_match_data_optimized(match_id):
             e."actionType",
             e.result,
             (e.player ->> 'id') as player_id_raw,
-            
-            -- We halen de ruwe tijdstring op (bv. '53:31.7141')
             (e."gameTime" ->> 'gameTime') as "TijdString",
-            
             CAST(e."start" -> 'coordinates' ->> 'x' AS FLOAT) as x_start,
             CAST(e."start" -> 'coordinates' ->> 'y' AS FLOAT) as y_start,
             CAST(e."end" -> 'coordinates' ->> 'x' AS FLOAT) as x_end,
@@ -117,13 +105,11 @@ def get_match_data_optimized(match_id):
     """
     df_ev = run_query(q_events, (match_id,))
     
-    if df_ev.empty:
-        return pd.DataFrame()
+    if df_ev.empty: return pd.DataFrame()
     
-    # Python Tijd Parsing (Veiliger dan SQL gameTimeInSec)
     df_ev['Minuut'] = df_ev['TijdString'].apply(parse_gametime_to_min)
 
-    # STAP 2: Teams
+    # Teams ophalen
     squad_ids = df_ev['squadId'].dropna().unique().tolist()
     if squad_ids:
         s_ids_formatted = ", ".join(f"'{x}'" for x in squad_ids)
@@ -132,27 +118,21 @@ def get_match_data_optimized(match_id):
         if not df_sq.empty:
             squad_map = dict(zip(df_sq['id'].astype(str), df_sq['name']))
             df_ev['Team'] = df_ev['squadId'].astype(str).map(squad_map).fillna('Onbekend')
-        else:
-            df_ev['Team'] = 'Onbekend'
-    else:
-        df_ev['Team'] = 'Onbekend'
+        else: df_ev['Team'] = 'Onbekend'
+    else: df_ev['Team'] = 'Onbekend'
 
-    # STAP 3: Spelers
+    # Spelers ophalen
     player_ids = df_ev['player_id_raw'].dropna().unique().tolist()
     player_ids = [str(pid) for pid in player_ids if str(pid).isdigit()]
-    
     if player_ids:
         p_ids_formatted = ", ".join(f"'{x}'" for x in player_ids)
         q_players = f"SELECT id, commonname FROM public.players WHERE id IN ({p_ids_formatted})"
         df_pl = run_query(q_players)
-        
         if not df_pl.empty:
             player_map = dict(zip(df_pl['id'].astype(str), df_pl['commonname']))
             df_ev['Speler'] = df_ev['player_id_raw'].astype(str).map(player_map).fillna('Onbekend')
-        else:
-            df_ev['Speler'] = 'Onbekend'
-    else:
-        df_ev['Speler'] = 'Onbekend'
+        else: df_ev['Speler'] = 'Onbekend'
+    else: df_ev['Speler'] = 'Onbekend'
 
     return df_ev
 
@@ -163,42 +143,27 @@ if df_events.empty:
     st.warning(f"⚠️ Geen events gevonden (ID: {sel_match_id}).")
     st.stop()
 
-# -----------------------------------------------------------------------------
-# 3. VERWERKING & LOGICA
-# -----------------------------------------------------------------------------
 # Clean Data
 df_events['action_clean'] = df_events['action'].astype(str).str.upper().str.strip()
 df_events['result_clean'] = df_events['result'].astype(str).str.upper().str.strip()
 df_events['squadId_clean'] = df_events['squadId'].apply(normalize_id)
 
+# -----------------------------------------------------------------------------
+# 3. VERWERKING & LOGICA
+# -----------------------------------------------------------------------------
 tab1, tab2, tab3 = st.tabs(["📊 Stats & Tijdlijn", "📍 Pitch Map (Veld)", "📋 Data Lijst"])
 
 with tab1:
-    # A. SCOREBORD (Fix: Result 'SUCCESS' alleen voor acties waar dat relevant is, niet voor GOAL/OWN_GOAL want die zijn leeg)
+    # --- A. SCOREBORD ---
     home_id = normalize_id(match_row['homeSquadId'])
     away_id = normalize_id(match_row['awaySquadId'])
 
-    # Home Goals: Action=GOAL & HomeID  OF  Action=OWN_GOAL & AwayID
-    # We checken GEEN resultaat voor goals, omdat dit 'NaN' is in jouw data.
-    goals_home = df_events[
-        (df_events['squadId_clean'] == home_id) & 
-        (df_events['action_clean'] == 'GOAL')
-    ]
-    own_goals_for_home = df_events[
-        (df_events['squadId_clean'] == away_id) & 
-        (df_events['action_clean'] == 'OWN_GOAL')
-    ]
+    goals_home = df_events[(df_events['squadId_clean'] == home_id) & (df_events['action_clean'] == 'GOAL')]
+    own_goals_for_home = df_events[(df_events['squadId_clean'] == away_id) & (df_events['action_clean'] == 'OWN_GOAL')]
     score_home = len(goals_home) + len(own_goals_for_home)
 
-    # Away Goals
-    goals_away = df_events[
-        (df_events['squadId_clean'] == away_id) & 
-        (df_events['action_clean'] == 'GOAL')
-    ]
-    own_goals_for_away = df_events[
-        (df_events['squadId_clean'] == home_id) & 
-        (df_events['action_clean'] == 'OWN_GOAL')
-    ]
+    goals_away = df_events[(df_events['squadId_clean'] == away_id) & (df_events['action_clean'] == 'GOAL')]
+    own_goals_for_away = df_events[(df_events['squadId_clean'] == home_id) & (df_events['action_clean'] == 'OWN_GOAL')]
     score_away = len(goals_away) + len(own_goals_for_away)
 
     c1, c2, c3 = st.columns([1, 2, 1])
@@ -210,30 +175,22 @@ with tab1:
             </div>
             """, unsafe_allow_html=True)
 
-    # B. STATS & TIJDLIJN
+    # --- B. TIJDLIJN & STATS ---
     col_timeline, col_stats = st.columns([3, 2])
 
     with col_timeline:
         st.subheader("Wedstrijdverloop")
-        
-        # 1. Goals & Own Goals (Geen result check)
         mask_goals = df_events['action_clean'].isin(['GOAL', 'OWN_GOAL'])
+        mask_cards = df_events['action_clean'].isin(['CARD', 'YELLOW_CARD', 'RED_CARD', 'SUBSTITUTION'])
         
-        # 2. Kaarten & Wissels
-        mask_cards_subs = df_events['action_clean'].isin(['CARD', 'YELLOW_CARD', 'RED_CARD', 'SUBSTITUTION'])
-        
-        imp_events = df_events[mask_goals | mask_cards_subs].copy()
+        imp_events = df_events[mask_goals | mask_cards].copy()
         
         if not imp_events.empty:
             color_map = {
-                "GOAL": "#2ecc71", 
-                "OWN_GOAL": "#e74c3c", 
-                "CARD": "#f1c40f", 
-                "YELLOW_CARD": "#f1c40f", 
-                "RED_CARD": "#c0392b",
+                "GOAL": "#2ecc71", "OWN_GOAL": "#e74c3c", 
+                "CARD": "#f1c40f", "YELLOW_CARD": "#f1c40f", "RED_CARD": "#c0392b",
                 "SUBSTITUTION": "#3498db"
             }
-            
             fig_tl = px.scatter(
                 imp_events, x="Minuut", y="Team", color="action_clean", symbol="action_clean",
                 hover_data=["Speler", "TijdString"], size_max=15, 
@@ -241,7 +198,8 @@ with tab1:
                 title="Tijdlijn"
             )
             fig_tl.update_traces(marker=dict(size=14, line=dict(width=1, color='DarkSlateGrey')))
-            fig_tl.update_layout(height=400, legend=dict(orientation="h", y=1.1))
+            # Legende uit
+            fig_tl.update_layout(height=400, showlegend=False)
             st.plotly_chart(fig_tl, use_container_width=True)
         else:
             st.info("Geen hoogtepunten gevonden.")
@@ -254,28 +212,62 @@ with tab1:
         if not stats_pivot.empty:
             stats_pivot['Totaal'] = stats_pivot.sum(axis=1)
             stats_pivot = stats_pivot.sort_values('Totaal', ascending=False).drop(columns='Totaal')
-        
         st.dataframe(stats_pivot, use_container_width=True)
 
-    # C. EXTRA GRAFIEKEN
+    # --- C. NIEUWE GRAFIEKEN (xT & Passes) ---
     st.divider()
     c_xt1, c_xt2 = st.columns(2)
+    
     with c_xt1:
-        st.write("**Expected Threat (xT)**")
-        if 'xT' in df_events.columns:
-            xt_stats = df_events.groupby('Team')['xT'].sum().reset_index()
-            fig_xt = px.bar(xt_stats, x='Team', y='xT', color='Team', color_discrete_sequence=px.colors.qualitative.Pastel)
+        st.write("**Expected Threat (xT) Verloop**")
+        if 'xT' in df_events.columns and df_events['xT'].notna().any():
+            # 1. Maak bins van 1 minuut
+            df_events['Minuut_Bin'] = df_events['Minuut'].astype(int)
+            
+            # 2. Sommeer xT per team per minuut
+            xt_over_time = df_events.groupby(['Team', 'Minuut_Bin'])['xT'].sum().reset_index()
+            
+            # 3. Line Chart
+            fig_xt = px.line(
+                xt_over_time, x='Minuut_Bin', y='xT', color='Team', 
+                color_discrete_sequence=px.colors.qualitative.Pastel,
+                title="xT Generatie per Minuut"
+            )
+            fig_xt.update_layout(xaxis_title="Minuut", yaxis_title="xT (Sum)")
             st.plotly_chart(fig_xt, use_container_width=True)
+        else:
+            st.info("Geen xT data beschikbaar.")
+
     with c_xt2:
-        st.write("**Succesvolle Passes**")
-        # Hier checken we WEL op SUCCESS, want bij passes is result wel ingevuld
-        mask_pass = (df_events['action_clean'].str.contains('PASS')) & (df_events['result_clean'] == 'SUCCESS')
-        passes = df_events[mask_pass]
-        if not passes.empty:
-            p_counts = passes['Team'].value_counts().reset_index()
-            p_counts.columns = ['Team', 'Passes']
-            fig_pie = px.pie(p_counts, values='Passes', names='Team', hole=0.4, color_discrete_sequence=px.colors.qualitative.Pastel)
-            st.plotly_chart(fig_pie, use_container_width=True)
+        st.write("**Pass Analyse (Totaal vs Succes)**")
+        # 1. Filter alle events die 'PASS' bevatten
+        pass_mask = df_events['action_clean'].str.contains('PASS')
+        df_passes = df_events[pass_mask].copy()
+        
+        if not df_passes.empty:
+            # 2. Aggregeer Totaal & Succes per Team & Type
+            pass_stats = df_passes.groupby(['Team', 'action_clean']).agg(
+                Totaal=('action', 'count'),
+                Succes=('result_clean', lambda x: (x == 'SUCCESS').sum())
+            ).reset_index()
+            
+            # 3. Melt voor de grafiek (zodat we Totaal en Succes naast elkaar kunnen zetten)
+            df_melt = pass_stats.melt(id_vars=['Team', 'action_clean'], value_vars=['Totaal', 'Succes'], var_name='Status', value_name='Aantal')
+            
+            # 4. Grouped Bar Chart
+            fig_pass = px.bar(
+                df_melt, x='action_clean', y='Aantal', 
+                color='Status', barmode='group',
+                facet_col='Team', # Splits per team
+                color_discrete_map={'Totaal': '#bdc3c7', 'Succes': '#2ecc71'},
+                title="Pass Types: Totaal vs Succes"
+            )
+            # Layout opschonen
+            fig_pass.update_xaxes(title=None, tickangle=-45)
+            fig_pass.update_layout(showlegend=True)
+            st.plotly_chart(fig_pass, use_container_width=True)
+        else:
+            st.info("Geen passes gevonden.")
 
 # -----------------------------------------------------------------------------
 # 4. PITCH MAP
@@ -302,7 +294,7 @@ with tab2:
         
     if not df_m.empty:
         fig = go.Figure()
-        # Veld (100x100)
+        # Veld
         fig.add_shape(type="rect", x0=0, y0=0, x1=100, y1=100, line=dict(color="white"), fillcolor="#4CAF50", layer="below")
         fig.add_shape(type="line", x0=50, y0=0, x1=50, y1=100, line=dict(color="white", width=2))
         fig.add_shape(type="circle", x0=40, y0=40, x1=60, y1=60, line=dict(color="white", width=2))
