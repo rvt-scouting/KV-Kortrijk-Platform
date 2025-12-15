@@ -20,26 +20,27 @@ def get_options_data(table_name):
         value_col = 'id' if 'id' in cols else cols[0]
         return df[[value_col, label_col]].rename(columns={value_col: 'value', label_col: 'label'})
     except:
-        # Fallback lijsten
-        if "posities" in table_name:
-            return pd.DataFrame({'value': ["Doelman", "Verdediger", "Middenvelder", "Aanvaller"], 'label': ["Doelman", "Verdediger", "Middenvelder", "Aanvaller"]})
-        elif "advies" in table_name:
-            return pd.DataFrame({'value': ["A", "B", "C"], 'label': ["A - Top", "B - Goed", "C - Matig"]})
-        elif "profielen" in table_name:
-            return pd.DataFrame({'value': ["P1", "P2"], 'label': ["Profiel 1", "Profiel 2"]})
-        elif "shortlists" in table_name:
-            return pd.DataFrame({'value': [1], 'label': ["Algemeen"]})
+        # Fallback
+        if "posities" in table_name: return pd.DataFrame({'value': ["Doelman", "Verdediger", "Middenvelder", "Aanvaller"], 'label': ["Doelman", "Verdediger", "Middenvelder", "Aanvaller"]})
+        if "advies" in table_name: return pd.DataFrame({'value': ["A", "B", "C"], 'label': ["A", "B", "C"]})
+        if "profielen" in table_name: return pd.DataFrame({'value': ["P1"], 'label': ["Standaard"]})
+        if "shortlists" in table_name: return pd.DataFrame({'value': [1], 'label': ["Algemeen"]})
         return pd.DataFrame()
 
 def save_report_to_db(data):
-    """ Slaat rapport op (Upsert) """
+    """ Slaat rapport op (Upsert) - IDs worden veilig als string verwerkt """
     conn = None
     try:
         conn = init_connection()
         cur = conn.cursor()
         
+        # We casten alle ID's expliciet naar string om type-fouten te voorkomen
+        p_scout = str(data['scout_id'])
+        p_speler = str(data['speler_id'])
+        p_match = str(data['wedstrijd_id'])
+        
         check_q = "SELECT id FROM scouting.rapporten WHERE scout_id = %s AND speler_id = %s AND wedstrijd_id = %s"
-        cur.execute(check_q, (data['scout_id'], data['speler_id'], data['wedstrijd_id']))
+        cur.execute(check_q, (p_scout, p_speler, p_match))
         existing = cur.fetchone()
         
         if existing:
@@ -63,7 +64,7 @@ def save_report_to_db(data):
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
             """
             cur.execute(insert_q, (
-                data['scout_id'], data['speler_id'], data['wedstrijd_id'], data['competitie_id'],
+                p_scout, p_speler, p_match, str(data['competitie_id']),
                 data['positie_gespeeld'], data['profiel_code'], data['advies'], 
                 data['beoordeling'], data['rapport_tekst'], data['gouden_busser'], 
                 data['shortlist_id']
@@ -82,7 +83,7 @@ if "scout_drafts" not in st.session_state: st.session_state.scout_drafts = {}
 if 'user_info' not in st.session_state or not st.session_state.user_info:
     st.warning("⚠️ Log in AUB."); st.stop()
 
-current_scout_id = st.session_state.user_info.get('id')
+current_scout_id = str(st.session_state.user_info.get('id')) # Altijd string maken
 current_scout_name = st.session_state.user_info.get('naam', 'Onbekend')
 
 # -----------------------------------------------------------------------------
@@ -125,8 +126,8 @@ if sel_season and sel_comp:
     match_opts = {f"{r['home']} vs {r['away']} ({r['scheduledDate'].strftime('%d-%m')})": r for _, r in df_matches.iterrows()}
     sel_match_label = st.sidebar.selectbox("3. Wedstrijd", list(match_opts.keys()))
     sel_match_row = match_opts[sel_match_label]
-    selected_match_id = sel_match_row['id']
-    selected_comp_id = sel_match_row['iterationId']
+    selected_match_id = str(sel_match_row['id']) # ID string maken
+    selected_comp_id = str(sel_match_row['iterationId']) # ID string maken
     home_team_name = sel_match_row['home']
     away_team_name = sel_match_row['away']
 else: st.stop()
@@ -135,79 +136,48 @@ st.sidebar.divider()
 st.sidebar.write(f"👤 **Scout:** {current_scout_name}")
 
 # -----------------------------------------------------------------------------
-# 3. SPELERS OPHALEN UIT JSON (public.match_details_full)
+# 3. SPELERS OPHALEN
 # -----------------------------------------------------------------------------
-# We halen de JSON kolommen op
-# AANGEPAST: We gebruiken nu "id" in plaats van "matchId"
-json_query = """
-    SELECT "squadHome", "squadAway" 
-    FROM public.match_details_full 
-    WHERE "id" = %s
-"""
+json_query = 'SELECT "squadHome", "squadAway" FROM public.match_details_full WHERE "id" = %s'
+
 try:
-    # We sturen de ID als string mee, want match IDs zijn vaak strings/text in deze DB
-    df_json = run_query(json_query, params=(str(selected_match_id),))
-except Exception as e: 
-    st.error(f"Fout bij ophalen JSON data: {e}")
-    st.stop()
+    df_json = run_query(json_query, params=(selected_match_id,))
+except Exception as e: st.error(f"Fout JSON: {e}"); st.stop()
 
-if df_json.empty:
-    st.warning(f"Geen detail data gevonden in match_details_full voor Match ID: {selected_match_id}.")
-    st.stop()
+if df_json.empty: st.warning("Geen detail data."); st.stop()
 
-# Functie om JSON te parsen en lijst van dicts te maken
 def parse_squad_json(json_data, side):
     players_list = []
     try:
-        # Check of het een string is (soms geeft pandas dict terug, soms string)
         data = json_data if isinstance(json_data, dict) else json.loads(json_data)
-        
-        # Spelers
         if 'players' in data:
             for p in data['players']:
                 players_list.append({
-                    'player_id': str(p['id']),
+                    'player_id': str(p['id']), # ID string
                     'shirt_number': p.get('shirtNumber', '?'),
                     'side': side
                 })
-        
-        # Coach (optioneel toevoegen als 'speler' met speciaal nummer)
-        if 'coachId' in data and data['coachId']:
-             # We markeren de coach even apart, of voegen hem toe. 
-             # Voor nu focussen we op spelers, maar je kunt dit uitbreiden.
-             pass
-             
-    except Exception as e:
-        print(f"Parse error: {e}")
+    except: pass
     return players_list
 
-# Extract data
 home_players = parse_squad_json(df_json.iloc[0]['squadHome'], 'home')
 away_players = parse_squad_json(df_json.iloc[0]['squadAway'], 'away')
 all_players_data = home_players + away_players
 
-if not all_players_data:
-    st.warning("Geen spelers gevonden in de match details.")
-    st.stop()
+if not all_players_data: st.warning("Geen spelers."); st.stop()
 
-# Maak DataFrame
 df_p_raw = pd.DataFrame(all_players_data)
-
-# Nu moeten we de NAMEN ophalen uit public.players
 player_ids = tuple(df_p_raw['player_id'].unique())
+
 if player_ids:
     name_query = f"SELECT id, commonname FROM public.players WHERE id IN {player_ids}"
-    # Let op: tuple met 1 element heeft trailing comma nodig in SQL IN ()
     if len(player_ids) == 1: name_query = name_query.replace(f"IN {player_ids}", f"IN ('{player_ids[0]}')")
     
     df_names = run_query(name_query)
-    # Zorg dat ID string is voor merge
     df_names['id'] = df_names['id'].astype(str)
     
-    # Merge namen aan de raw data
     df_players = pd.merge(df_p_raw, df_names, left_on='player_id', right_on='id', how='left')
     df_players['commonname'] = df_players['commonname'].fillna("Onbekend")
-    # Sorteer op rugnummer
     df_players['shirt_number'] = pd.to_numeric(df_players['shirt_number'], errors='coerce').fillna(99)
     df_players = df_players.sort_values(by=['side', 'shirt_number'])
 else:
@@ -229,13 +199,13 @@ with col_list:
     if "active_player_id" not in st.session_state: st.session_state.active_player_id = None
 
     for _, row in filtered_df.iterrows():
-        pid = row['player_id']
+        pid = str(row['player_id'])
         pname = f"{int(row['shirt_number'])}. {row['commonname']}"
         
         draft_key = f"{selected_match_id}_{pid}_{current_scout_id}"
         has_draft = draft_key in st.session_state.scout_drafts
         
-        btn_type = "primary" if st.session_state.active_player_id == pid else "secondary"
+        btn_type = "primary" if str(st.session_state.active_player_id) == pid else "secondary"
         icon = "📝" if has_draft else "👤"
         
         if st.button(f"{icon} {pname}", key=f"btn_{pid}", type=btn_type, use_container_width=True):
@@ -244,14 +214,17 @@ with col_list:
 
 with col_editor:
     if st.session_state.active_player_id:
-        p_row = df_players[df_players['player_id'] == st.session_state.active_player_id].iloc[0]
+        active_pid = str(st.session_state.active_player_id)
+        p_row = df_players[df_players['player_id'] == active_pid].iloc[0]
         st.subheader(f"{p_row['commonname']}")
         
-        draft_key = f"{selected_match_id}_{st.session_state.active_player_id}_{current_scout_id}"
+        draft_key = f"{selected_match_id}_{active_pid}_{current_scout_id}"
         
+        # OPHALEN BESTAAND RAPPORT
         if draft_key not in st.session_state.scout_drafts:
+            # Let op: hier casten we ook naar string voor de zekerheid
             db_q = "SELECT * FROM scouting.rapporten WHERE scout_id = %s AND speler_id = %s AND wedstrijd_id = %s"
-            existing = run_query(db_q, params=(current_scout_id, int(st.session_state.active_player_id), selected_match_id))
+            existing = run_query(db_q, params=(current_scout_id, active_pid, selected_match_id))
             
             if not existing.empty:
                 rec = existing.iloc[0]
@@ -304,7 +277,7 @@ with col_editor:
         st.markdown("---")
         if st.button("💾 Rapport Opslaan", type="primary", use_container_width=True):
             save_data = {
-                "scout_id": current_scout_id, "speler_id": int(st.session_state.active_player_id),
+                "scout_id": current_scout_id, "speler_id": active_pid, # ID als string
                 "wedstrijd_id": selected_match_id, "competitie_id": selected_comp_id,
                 "positie_gespeeld": new_pos, "profiel_code": new_prof, "advies": new_adv,
                 "beoordeling": new_rating, "rapport_tekst": new_tekst, "gouden_busser": new_gouden, "shortlist_id": new_sl
