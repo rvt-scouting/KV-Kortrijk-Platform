@@ -7,6 +7,32 @@ from utils import run_query
 st.set_page_config(page_title="Match Events", page_icon="🏟️", layout="wide")
 
 # -----------------------------------------------------------------------------
+# HELPER: ID NORMALISATIE & TIJD PARSEN
+# -----------------------------------------------------------------------------
+def normalize_id(val):
+    """Zorgt dat IDs (int, float, str) altijd vergelijkbare strings zijn."""
+    try:
+        if pd.isna(val) or val == 'nan' or val == 'None':
+            return None
+        # Verwijder .0 als het een float string is
+        return str(int(float(val)))
+    except:
+        return str(val).strip()
+
+def parse_gametime_to_min(t_str):
+    """Zet 'MM:SS.ms' om naar minuten (float) voor de grafiek."""
+    try:
+        if not isinstance(t_str, str): return 0.0
+        # Pak het gedeelte voor de punt (eventuele ms strippen)
+        main_part = t_str.split('.')[0] 
+        parts = main_part.split(':')
+        if len(parts) >= 2:
+            return float(parts[0]) + float(parts[1])/60.0
+        return 0.0
+    except:
+        return 0.0
+
+# -----------------------------------------------------------------------------
 # 1. SELECTIE (SIDEBAR)
 # -----------------------------------------------------------------------------
 st.sidebar.header("🔍 Wedstrijd Selectie")
@@ -70,8 +96,10 @@ def get_match_data_optimized(match_id):
             e."actionType",
             e.result,
             (e.player ->> 'id') as player_id_raw,
-            (e."gameTime" ->> 'gameTime') as "Tijd",
-            CAST(e."gameTime" ->> 'gameTimeInSec' AS FLOAT) / 60.0 as "Minuut",
+            
+            -- HIER: Gebruik de string versie van gameTime
+            (e."gameTime" ->> 'gameTime') as "TijdString",
+            
             CAST(e."start" -> 'coordinates' ->> 'x' AS FLOAT) as x_start,
             CAST(e."start" -> 'coordinates' ->> 'y' AS FLOAT) as y_start,
             CAST(e."end" -> 'coordinates' ->> 'x' AS FLOAT) as x_end,
@@ -85,6 +113,9 @@ def get_match_data_optimized(match_id):
     
     if df_ev.empty:
         return pd.DataFrame()
+    
+    # 1. Bereken Minuut voor plotten (o.b.v. string "53:31")
+    df_ev['Minuut'] = df_ev['TijdString'].apply(parse_gametime_to_min)
 
     # STAP 2: Teams
     squad_ids = df_ev['squadId'].dropna().unique().tolist()
@@ -127,41 +158,46 @@ if df_events.empty:
     st.stop()
 
 # -----------------------------------------------------------------------------
-# 3. STATS & SCOREBORD
+# 3. VERWERKING & LOGICA
 # -----------------------------------------------------------------------------
+# Maak alles Upper case en strip spaties voor veilige filtering
+df_events['action_clean'] = df_events['action'].astype(str).str.upper().str.strip()
+df_events['result_clean'] = df_events['result'].astype(str).str.upper().str.strip()
+df_events['squadId_clean'] = df_events['squadId'].apply(normalize_id)
+
 tab1, tab2, tab3 = st.tabs(["📊 Stats & Tijdlijn", "📍 Pitch Map (Veld)", "📋 Data Lijst"])
 
 with tab1:
-    # A. SCOREBORD (Aangepast aan jouw data: GOAL, OWN_GOAL, SUCCESS)
-    home_id = str(match_row['homeSquadId'])
-    away_id = str(match_row['awaySquadId'])
-    df_events['squadId'] = df_events['squadId'].astype(str)
+    # A. SCOREBORD
+    home_id = normalize_id(match_row['homeSquadId'])
+    away_id = normalize_id(match_row['awaySquadId'])
 
-    # Home Score = Goals Home + Own Goals Away
+    # Home Goals: Action=GOAL & HomeID  OF  Action=OWN_GOAL & AwayID
+    # Check op SUCCESS
     goals_home = df_events[
-        (df_events['squadId'] == home_id) & 
-        (df_events['action'] == 'GOAL') & 
-        (df_events['result'] == 'SUCCESS')
+        (df_events['squadId_clean'] == home_id) & 
+        (df_events['action_clean'] == 'GOAL') & 
+        (df_events['result_clean'] == 'SUCCESS')
     ]
-    own_goals_away = df_events[
-        (df_events['squadId'] == away_id) & 
-        (df_events['action'] == 'OWN_GOAL') & 
-        (df_events['result'] == 'SUCCESS')
+    own_goals_for_home = df_events[
+        (df_events['squadId_clean'] == away_id) & 
+        (df_events['action_clean'] == 'OWN_GOAL') & 
+        (df_events['result_clean'] == 'SUCCESS')
     ]
-    score_home = len(goals_home) + len(own_goals_away)
+    score_home = len(goals_home) + len(own_goals_for_home)
 
-    # Away Score = Goals Away + Own Goals Home
+    # Away Goals
     goals_away = df_events[
-        (df_events['squadId'] == away_id) & 
-        (df_events['action'] == 'GOAL') & 
-        (df_events['result'] == 'SUCCESS')
+        (df_events['squadId_clean'] == away_id) & 
+        (df_events['action_clean'] == 'GOAL') & 
+        (df_events['result_clean'] == 'SUCCESS')
     ]
-    own_goals_home = df_events[
-        (df_events['squadId'] == home_id) & 
-        (df_events['action'] == 'OWN_GOAL') & 
-        (df_events['result'] == 'SUCCESS')
+    own_goals_for_away = df_events[
+        (df_events['squadId_clean'] == home_id) & 
+        (df_events['action_clean'] == 'OWN_GOAL') & 
+        (df_events['result_clean'] == 'SUCCESS')
     ]
-    score_away = len(goals_away) + len(own_goals_home)
+    score_away = len(goals_away) + len(own_goals_for_away)
 
     c1, c2, c3 = st.columns([1, 2, 1])
     with c2:
@@ -178,19 +214,18 @@ with tab1:
     with col_timeline:
         st.subheader("Wedstrijdverloop")
         
-        # Filter op belangrijke events (Hoofdletters!)
-        # We pakken ook YELLOW_CARD en RED_CARD voor de zekerheid
-        target_actions = ['GOAL', 'OWN_GOAL', 'CARD', 'YELLOW_CARD', 'RED_CARD', 'SUBSTITUTION']
+        # Filteren op belangrijke events
+        # We negeren 'result' voor kaarten/wissels voor de zekerheid, maar Goals moeten SUCCESS zijn
         
-        # Filter: Actie moet in lijst staan EN (Resultaat is SUCCESS OF het is een kaart/wissel)
-        mask_tl = (df_events['action'].isin(target_actions)) & (
-            (df_events['result'] == 'SUCCESS') | 
-            (df_events['action'].isin(['CARD', 'YELLOW_CARD', 'RED_CARD', 'SUBSTITUTION']))
-        )
-        imp_events = df_events[mask_tl].copy()
+        # 1. Goals & Own Goals (Moeten SUCCESS zijn)
+        mask_goals = (df_events['action_clean'].isin(['GOAL', 'OWN_GOAL'])) & (df_events['result_clean'] == 'SUCCESS')
+        
+        # 2. Kaarten & Wissels (Result maakt niet uit)
+        mask_cards_subs = df_events['action_clean'].isin(['CARD', 'YELLOW_CARD', 'RED_CARD', 'SUBSTITUTION'])
+        
+        imp_events = df_events[mask_goals | mask_cards_subs].copy()
         
         if not imp_events.empty:
-            # Kleuren mapping (Hoofdletters)
             color_map = {
                 "GOAL": "#2ecc71", 
                 "OWN_GOAL": "#e74c3c", 
@@ -199,21 +234,24 @@ with tab1:
                 "RED_CARD": "#c0392b",
                 "SUBSTITUTION": "#3498db"
             }
+            # Fallback kleur als actie niet in map staat
             
             fig_tl = px.scatter(
-                imp_events, x="Minuut", y="Team", color="action", symbol="action",
-                hover_data=["Speler", "Tijd", "result"], size_max=15, color_discrete_map=color_map
+                imp_events, x="Minuut", y="Team", color="action_clean", symbol="action_clean",
+                hover_data=["Speler", "TijdString", "result"], size_max=15, 
+                color_discrete_map=color_map,
+                title="Tijdlijn"
             )
             fig_tl.update_traces(marker=dict(size=14, line=dict(width=1, color='DarkSlateGrey')))
             fig_tl.update_layout(height=400, legend=dict(orientation="h", y=1.1))
             st.plotly_chart(fig_tl, use_container_width=True)
         else:
-            st.info("Geen hoogtepunten (Goals/Kaarten/Wissels) gevonden.")
+            st.info("Geen hoogtepunten gevonden.")
 
     with col_stats:
         st.subheader("Statistieken")
-        stats_counts = df_events.groupby(['Team', 'action']).size().reset_index(name='Aantal')
-        stats_pivot = stats_counts.pivot(index='action', columns='Team', values='Aantal').fillna(0).astype(int)
+        stats_counts = df_events.groupby(['Team', 'action_clean']).size().reset_index(name='Aantal')
+        stats_pivot = stats_counts.pivot(index='action_clean', columns='Team', values='Aantal').fillna(0).astype(int)
         
         if not stats_pivot.empty:
             stats_pivot['Totaal'] = stats_pivot.sum(axis=1)
@@ -231,13 +269,10 @@ with tab1:
             fig_xt = px.bar(xt_stats, x='Team', y='xT', color='Team', color_discrete_sequence=px.colors.qualitative.Pastel)
             st.plotly_chart(fig_xt, use_container_width=True)
     with c_xt2:
-        # Aangepast naar LOW_PASS / HIGH_PASS etc? Of gewoon alles met 'PASS' in de naam?
-        # We checken hier voor de zekerheid 'LOW_PASS' en 'HIGH_PASS' en 'PASS'
         st.write("**Succesvolle Passes**")
-        passes = df_events[
-            (df_events['action'].str.contains('PASS', case=False)) & 
-            (df_events['result'] == 'SUCCESS')
-        ]
+        # Filter op alles wat 'PASS' bevat
+        mask_pass = (df_events['action_clean'].str.contains('PASS')) & (df_events['result_clean'] == 'SUCCESS')
+        passes = df_events[mask_pass]
         if not passes.empty:
             p_counts = passes['Team'].value_counts().reset_index()
             p_counts.columns = ['Team', 'Passes']
@@ -254,10 +289,11 @@ with tab2:
     teams = df_events['Team'].dropna().unique().tolist()
     sel_teams = cf1.multiselect("Teams", teams, default=teams)
     
-    actions = df_events['action'].unique().tolist()
-    # Aangepaste defaults voor jouw data
+    actions = df_events['action_clean'].unique().tolist()
+    # Slimme defaults
     defs = [x for x in ['SHOT', 'MID_RANGE_SHOT', 'GOAL', 'LOW_PASS'] if x in actions]
-    if not defs: defs = actions[:3]
+    if not defs: defs = actions[:3] if len(actions)>3 else actions
+    
     sel_actions = cf2.multiselect("Acties", actions, default=defs)
     
     players = df_events['Speler'].dropna().unique().tolist()
@@ -265,7 +301,7 @@ with tab2:
     
     show_lines = st.checkbox("Toon Pass/Looplijnen", value=False)
 
-    df_m = df_events[(df_events['Team'].isin(sel_teams)) & (df_events['action'].isin(sel_actions))]
+    df_m = df_events[(df_events['Team'].isin(sel_teams)) & (df_events['action_clean'].isin(sel_actions))]
     if sel_players: df_m = df_m[df_m['Speler'].isin(sel_players)]
         
     if not df_m.empty:
@@ -286,7 +322,8 @@ with tab2:
                 x=dft['x_start'], y=dft['y_start'], mode='markers', name=team,
                 marker=dict(size=8, color=color, line=dict(width=1, color='black')),
                 text=dft['Speler'] + " (" + dft['action'] + ")",
-                hovertemplate="%{text}<br>Min: %{customdata[0]}", customdata=dft[['Minuut']]
+                hovertemplate="%{text}<br>Tijd: %{customdata[0]}", 
+                customdata=dft[['TijdString']]
             ))
             
             if show_lines and len(dft) < 1000:
@@ -306,7 +343,6 @@ with tab2:
 # -----------------------------------------------------------------------------
 with tab3:
     st.subheader("📋 Ruwe Data")
-    # Zorg dat de belangrijkste kolommen vooraan staan
-    cols = ['Volgorde', 'Minuut', 'Team', 'Speler', 'action', 'actionType', 'result']
+    cols = ['Volgorde', 'TijdString', 'Team', 'Speler', 'action', 'result', 'xT']
     remaining = [c for c in df_events.columns if c not in cols]
     st.dataframe(df_events[cols + remaining], use_container_width=True)
