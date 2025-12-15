@@ -39,6 +39,23 @@ def get_scouting_options_safe(table_name):
     except Exception:
         return fallback_data
 
+def search_player_in_db(search_term):
+    """ Zoekt spelers in de publieke database op basis van naam """
+    if not search_term or len(search_term) < 2:
+        return pd.DataFrame()
+    try:
+        # Case insensitive search met limit om DB niet te overbelasten
+        q = """
+            SELECT id, commonname, firstname, lastname 
+            FROM public.players 
+            WHERE commonname ILIKE %s OR lastname ILIKE %s
+            LIMIT 20
+        """
+        term = f"%{search_term}%"
+        return run_query(q, params=(term, term))
+    except:
+        return pd.DataFrame()
+
 def save_report_to_db(data):
     """ Slaat rapport op (Upsert). Handelt Database IDs en Custom namen af. """
     conn = None
@@ -200,6 +217,7 @@ st.sidebar.write(f"👤 **Scout:** {current_scout_name}")
 df_players = pd.DataFrame()
 
 if selected_match_id:
+    # DATABASE SPELERS OPHALEN
     json_query = 'SELECT "squadHome", "squadAway" FROM public.match_details_full WHERE "id" = %s'
     try:
         df_json = run_query(json_query, params=(selected_match_id,))
@@ -237,13 +255,16 @@ if selected_match_id:
 # -----------------------------------------------------------------------------
 col_list, col_editor = st.columns([1, 2])
 
+# State management voor manual mode
 if "manual_player_mode" not in st.session_state: st.session_state.manual_player_mode = False
-if "manual_player_name" not in st.session_state: st.session_state.manual_player_name = ""
+if "manual_player_type" not in st.session_state: st.session_state.manual_player_type = "db_search" # of 'manual_text'
+if "manual_search_result" not in st.session_state: st.session_state.manual_search_result = None
+if "manual_player_name_text" not in st.session_state: st.session_state.manual_player_name_text = ""
 
 with col_list:
     st.subheader("Selecties")
     
-    # Als er spelers zijn, toon lijst
+    # 1. Toon Database Spelers (Als beschikbaar)
     if not is_manual_match and not df_players.empty:
         team_tab = st.radio("Team", [home_team_name, away_team_name], horizontal=True, label_visibility="collapsed")
         side_filter = 'home' if team_tab == home_team_name else 'away'
@@ -255,6 +276,7 @@ with col_list:
             dkey = f"{selected_match_id}_{pid}_{current_scout_id}"
             has_draft = dkey in st.session_state.scout_drafts
             
+            # Button logic
             btn_type = "primary" if str(st.session_state.active_player_id) == pid and not st.session_state.manual_player_mode else "secondary"
             icon = "📝" if has_draft else "👤"
             
@@ -263,41 +285,70 @@ with col_list:
                 st.session_state.manual_player_mode = False
                 st.rerun()
 
+    # 2. Knop voor Manueel / Zoeken
     st.markdown("---")
-    if is_manual_match or st.button("➕ Speler handmatig toevoegen", use_container_width=True):
+    knop_label = "➕ Speler toevoegen / Zoeken" if not is_manual_match else "Selecteer Speler"
+    
+    # In manual match mode is dit de standaard view, anders via knop
+    if is_manual_match or st.button(knop_label, use_container_width=True):
          st.session_state.manual_player_mode = True
          st.session_state.active_player_id = None
 
     if st.session_state.manual_player_mode:
-        st.info("Voer naam van de speler in:")
-        manual_name_input = st.text_input("Naam Speler", value=st.session_state.manual_player_name, key="inp_manual_name_sidebar")
-        if manual_name_input:
-            st.session_state.manual_player_name = manual_name_input
+        st.info("Kies speler methode:")
+        m_type = st.radio("Methode", ["🔍 Zoek in Database", "✍️ Nieuwe Naam (Tekst)"], key="inp_m_type")
+        st.session_state.manual_player_type = "db_search" if "Database" in m_type else "manual_text"
+        
+        if st.session_state.manual_player_type == "db_search":
+            search_txt = st.text_input("Zoek op naam:", placeholder="bv. De Bruyne")
+            if search_txt:
+                results = search_player_in_db(search_txt)
+                if not results.empty:
+                    st.write("Resultaten:")
+                    for _, r in results.iterrows():
+                        if st.button(f"👤 {r['commonname']} ({r['firstname']} {r['lastname']})", key=f"srch_{r['id']}"):
+                            st.session_state.active_player_id = str(r['id']) # We hebben een ID!
+                            st.session_state.manual_player_mode = False # Terug naar 'normaal' gedrag met ID
+                            st.rerun()
+                else:
+                    st.warning("Geen spelers gevonden.")
+        else:
+            # Volledig manueel (tekst)
+            m_name = st.text_input("Naam Speler", value=st.session_state.manual_player_name_text, key="inp_m_text")
+            if m_name:
+                st.session_state.manual_player_name_text = m_name
 
 with col_editor:
     active_pid = None
     active_pname = "Onbekend"
     active_match_key = selected_match_id if selected_match_id else custom_match_name
     
-    # SCENARIO A: Bestaande Speler (CHECK OP df_players.empty en Kolom!)
-    if st.session_state.active_player_id and not st.session_state.manual_player_mode and not df_players.empty and 'player_id' in df_players.columns:
+    # SCENARIO A: We hebben een PLAYER ID (Uit de match-lijst OF uit de zoekfunctie)
+    if st.session_state.active_player_id and not (st.session_state.manual_player_mode and st.session_state.manual_player_type == "manual_text"):
         active_pid = str(st.session_state.active_player_id)
-        # Extra veiligheid: bestaat het ID wel in deze lijst?
-        if active_pid in df_players['player_id'].values:
-            p_row = df_players[df_players['player_id'] == active_pid].iloc[0]
-            active_pname = p_row['commonname']
-            
-            draft_key = f"{active_match_key}_{active_pid}_{current_scout_id}"
+        
+        # Probeer naam op te halen
+        # Optie 1: Uit de wedstrijdlijst
+        if not df_players.empty and 'player_id' in df_players.columns and active_pid in df_players['player_id'].values:
+             active_pname = df_players[df_players['player_id'] == active_pid].iloc[0]['commonname']
+        # Optie 2: Uit de database (als we gezocht hebben)
+        else:
+             res = run_query(f"SELECT commonname FROM public.players WHERE id = {active_pid}")
+             if not res.empty: active_pname = res.iloc[0]['commonname']
+             
+        draft_key = f"{active_match_key}_{active_pid}_{current_scout_id}"
+        
+        if selected_match_id:
             where_clause = "scout_id = %s AND speler_id = %s AND wedstrijd_id = %s"
             params = (current_scout_id, active_pid, selected_match_id)
         else:
-            # ID bestaat niet in de huidige lijst (misschien van andere match)
-            st.session_state.active_player_id = None
-            st.rerun()
+            # ID wel bekend, maar match is manueel
+            where_clause = "scout_id = %s AND speler_id = %s AND custom_wedstrijd_naam = %s"
+            params = (current_scout_id, active_pid, custom_match_name)
         
-    # SCENARIO B: Manuele Speler
-    elif st.session_state.manual_player_mode and st.session_state.manual_player_name:
-        active_pname = st.session_state.manual_player_name
+    # SCENARIO B: Volledig Manuele Naam (Geen ID)
+    elif st.session_state.manual_player_mode and st.session_state.manual_player_type == "manual_text" and st.session_state.manual_player_name_text:
+        active_pname = st.session_state.manual_player_name_text
         draft_key = f"{active_match_key}_{active_pname}_{current_scout_id}"
         
         if selected_match_id:
@@ -308,12 +359,12 @@ with col_editor:
             params = (current_scout_id, active_pname, custom_match_name)
             
     else:
-        if is_manual_match: st.info("👈 Voer een spelernaam in.")
-        else: st.info("👈 Selecteer een speler.")
+        st.info("👈 Selecteer of zoek een speler.")
         st.stop()
 
     st.subheader(f"Rapport: {active_pname}")
 
+    # Load Data
     if draft_key not in st.session_state.scout_drafts:
         db_q = f"SELECT * FROM scouting.rapporten WHERE {where_clause}"
         existing = run_query(db_q, params=params)
@@ -375,8 +426,8 @@ with col_editor:
     if st.button("💾 Rapport Opslaan", type="primary", use_container_width=True, key=f"save_{unique_suffix}"):
         save_data = {
             "scout_id": current_scout_id,
-            "speler_id": active_pid, 
-            "wedstrijd_id": selected_match_id,
+            "speler_id": active_pid, # Kan None zijn als het een manuele tekst is
+            "wedstrijd_id": selected_match_id, 
             "competitie_id": selected_comp_id,
             "custom_speler_naam": active_pname if not active_pid else None,
             "custom_wedstrijd_naam": custom_match_name if not selected_match_id else None,
