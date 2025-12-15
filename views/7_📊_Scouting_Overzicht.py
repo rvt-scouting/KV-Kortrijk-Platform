@@ -120,14 +120,16 @@ with tab2:
     
     # Haal eerst de shortlist namen op
     try:
-        sl_opts = run_query("SELECT * FROM scouting.shortlists")
+        # AANGEPAST: id en naam ophalen (ipv value/label)
+        sl_opts = run_query("SELECT id, naam FROM scouting.shortlists ORDER BY id")
+        
         if not sl_opts.empty:
             # Maak tabs voor elke shortlist
-            sl_tabs = st.tabs(sl_opts['label'].tolist())
+            sl_tabs = st.tabs(sl_opts['naam'].tolist())
             
             for i, row in sl_opts.iterrows():
-                sl_id = row['value'] # of 'id' afhankelijk van je tabelstructuur
-                sl_name = row['label']
+                sl_id = row['id']     # AANGEPAST
+                sl_name = row['naam'] # AANGEPAST
                 
                 with sl_tabs[i]:
                     # Haal spelers op die op deze shortlist staan
@@ -160,12 +162,12 @@ with tab2:
                             }
                         )
                     else:
-                        st.info(f"Nog geen spelers op shortlist '{sl_name}'.")
+                        st.info(f"Nog geen rapporten gekoppeld aan shortlist '{sl_name}'.")
         else:
-            st.warning("Geen shortlists gedefinieerd in tabel scouting.shortlists")
+            st.warning("Nog geen shortlists aangemaakt. Ga naar de Admin of Shortlist Manager.")
             
     except Exception as e:
-        st.error(f"Fout shortlists: {e}")
+        st.error(f"Fout bij laden shortlists: {e}")
 
 # =============================================================================
 # TAB 3: AANGEBODEN SPELERS (MARKT)
