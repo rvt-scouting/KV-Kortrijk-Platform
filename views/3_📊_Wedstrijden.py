@@ -154,7 +154,7 @@ team_colors = {match_row['home']: '#e74c3c', match_row['away']: '#3498db', 'Onbe
 # -----------------------------------------------------------------------------
 # 4. DASHBOARD
 # -----------------------------------------------------------------------------
-tab1, tab2, tab3, tab4 = st.tabs(["📊 Stats & Tijdlijn", "📍 Pitch Map", "🏃 Spelers xT (Top)", "📋 Data"])
+tab1, tab2, tab3, tab4 = st.tabs(["📊 Stats & Tijdlijn", "📍 Pitch Map & Radar", "🏃 Spelers xT (Top)", "📋 Data"])
 
 with tab1:
     # --- SCOREBORD ---
@@ -200,7 +200,6 @@ with tab1:
     c1, c2 = st.columns(2)
     with c1:
         st.write("**Total Expected Threat (xT)**")
-        # Som van raw xT_Team per team (Creatie)
         xt_total = df_events.groupby('Team')['xT_Team_Raw'].sum().reset_index()
         fig_xt = px.bar(xt_total, x='Team', y='xT_Team_Raw', color='Team', 
                         color_discrete_map=team_colors, title="Totaal Gecreëerde xT")
@@ -211,21 +210,18 @@ with tab1:
         passes = df_events[df_events['action_clean'].str.contains('PASS')].copy()
         
         if not passes.empty:
-            # Groepeer per Team en Type
-            # We tellen Totaal en Succes
             pass_agg = passes.groupby(['Team', 'action_clean']).agg(
                 Totaal=('action', 'count'),
                 Succes=('result_clean', lambda x: (x == 'SUCCESS').sum())
             ).reset_index()
             
-            # Melt voor side-by-side bar chart
             df_melt = pass_agg.melt(id_vars=['Team', 'action_clean'], value_vars=['Totaal', 'Succes'], 
                                     var_name='Status', value_name='Aantal')
             
             fig_pass = px.bar(
                 df_melt, x='action_clean', y='Aantal', 
                 color='Status', barmode='group',
-                facet_col='Team', # Splits per team
+                facet_col='Team', 
                 color_discrete_map={'Totaal': '#95a5a6', 'Succes': '#2ecc71'},
                 title="Passes: Totaal vs Succes"
             )
@@ -235,34 +231,27 @@ with tab1:
             st.info("Geen passes.")
 
 # -----------------------------------------------------------------------------
-# TAB 2: PITCH MAP (CORRECTE COORDINATEN -52.5 tot 52.5)
+# TAB 2: PITCH MAP & RADAR
 # -----------------------------------------------------------------------------
 with tab2:
-    st.subheader("📍 Event Map")
+    st.subheader("📍 Event Map & Vergelijking")
     c1, c2, c3 = st.columns(3)
     teams = df_events['Team'].unique(); sel_teams = c1.multiselect("Teams", teams, default=teams)
     acts = df_events['action_clean'].unique(); sel_acts = c2.multiselect("Acties", acts, default=[x for x in ['SHOT','GOAL'] if x in acts])
-    plys = df_events['Speler'].unique(); sel_plys = c3.multiselect("Speler", plys)
+    plys = df_events['Speler'].unique(); sel_plys = c3.multiselect("Speler (Map filter)", plys)
     
     df_m = df_events[(df_events['Team'].isin(sel_teams)) & (df_events['action_clean'].isin(sel_acts))]
     if sel_plys: df_m = df_m[df_m['Speler'].isin(sel_plys)]
     
+    # 1. PITCH MAP
     if not df_m.empty:
         fig = go.Figure()
-        
-        # VELD CONFIGURATIE (Standaard Opta/SkillCorner range -52.5/52.5 en -34/34)
-        # Gras
+        # VELD CONFIGURATIE -52.5 tot 52.5
         fig.add_shape(type="rect", x0=-52.5, y0=-34, x1=52.5, y1=34, line=dict(color="white"), fillcolor="#4CAF50", layer="below")
-        
-        # Middenlijn & Cirkel
         fig.add_shape(type="line", x0=0, y0=-34, x1=0, y1=34, line=dict(color="white"))
         fig.add_shape(type="circle", x0=-9.15, y0=-9.15, x1=9.15, y1=9.15, line=dict(color="white"))
-        
-        # Boxen Links (-52.5)
-        fig.add_shape(type="rect", x0=-52.5, y0=-20.16, x1=-36, y1=20.16, line=dict(color="white")) # Grote box
-        fig.add_shape(type="rect", x0=-52.5, y0=-9.16, x1=-46.5, y1=9.16, line=dict(color="white")) # Kleine box
-        
-        # Boxen Rechts (52.5)
+        fig.add_shape(type="rect", x0=-52.5, y0=-20.16, x1=-36, y1=20.16, line=dict(color="white"))
+        fig.add_shape(type="rect", x0=-52.5, y0=-9.16, x1=-46.5, y1=9.16, line=dict(color="white"))
         fig.add_shape(type="rect", x0=36, y0=-20.16, x1=52.5, y1=20.16, line=dict(color="white"))
         fig.add_shape(type="rect", x0=46.5, y0=-9.16, x1=52.5, y1=9.16, line=dict(color="white"))
 
@@ -281,10 +270,56 @@ with tab2:
             width=800, height=550, 
             xaxis=dict(visible=False, range=[-55, 55]), 
             yaxis=dict(visible=False, range=[-36, 36], scaleanchor="x", scaleratio=1),
-            plot_bgcolor='rgba(0,0,0,0)'
+            plot_bgcolor='rgba(0,0,0,0)',
+            margin=dict(l=0, r=0, t=20, b=0)
         )
         st.plotly_chart(fig, use_container_width=True)
     else: st.info("Geen events met deze filters.")
+
+    # 2. RADAR CHART (Onder de map)
+    st.divider()
+    st.subheader("🕸️ Spider Diagram: Team Vergelijking")
+    
+    # We gebruiken hier de teams en acties van de filter, maar negeren de SPELER filter
+    # zodat we team-totalen vergelijken.
+    df_radar = df_events[
+        (df_events['Team'].isin(sel_teams)) & 
+        (df_events['action_clean'].isin(sel_acts))
+    ]
+    
+    if not df_radar.empty and len(sel_acts) > 0:
+        # Group by Team, Action
+        radar_agg = df_radar.groupby(['Team', 'action_clean']).size().reset_index(name='Count')
+        
+        fig_rad = go.Figure()
+        
+        for t in sel_teams:
+            # Haal counts op in volgorde van sel_acts
+            vals = []
+            for a in sel_acts:
+                row = radar_agg[(radar_agg['Team'] == t) & (radar_agg['action_clean'] == a)]
+                val = row['Count'].values[0] if not row.empty else 0
+                vals.append(val)
+            
+            # Sluit de loop voor de grafiek
+            vals_plot = vals + [vals[0]]
+            thetas_plot = sel_acts + [sel_acts[0]]
+            
+            fig_rad.add_trace(go.Scatterpolar(
+                r=vals_plot, theta=thetas_plot,
+                fill='toself', name=t,
+                line_color=team_colors.get(t, '#95a5a6')
+            ))
+        
+        fig_rad.update_layout(
+            polar=dict(radialaxis=dict(visible=True)),
+            showlegend=True,
+            height=500,
+            title=f"Vergelijking: {', '.join(sel_acts)}"
+        )
+        st.plotly_chart(fig_rad, use_container_width=True)
+    else:
+        st.info("Selecteer minstens één actie en team om de radar te zien.")
 
 # -----------------------------------------------------------------------------
 # TAB 3: SPELERS xT
@@ -301,11 +336,7 @@ with tab3:
     with c2:
         fig_bar = px.bar(xt_stats, x='xT_Generated_Player', y='Speler', color='Team', orientation='h',
                          color_discrete_map=team_colors, title="Top 20 xT Spelers")
-        # MARGE VERGROTEN
-        fig_bar.update_layout(
-            yaxis={'categoryorder':'total ascending'},
-            margin=dict(l=150)
-        )
+        fig_bar.update_layout(yaxis={'categoryorder':'total ascending'}, margin=dict(l=150))
         st.plotly_chart(fig_bar, use_container_width=True)
 
 # -----------------------------------------------------------------------------
