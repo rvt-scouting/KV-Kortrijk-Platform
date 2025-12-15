@@ -74,7 +74,7 @@ else:
     pg_spelers = st.Page("views/1_⚽_Spelers_en_Teams.py", title="Spelers & Teams", icon="⚽")
     pg_coaches = st.Page("views/2_👔_Coaches.py", title="Coaches", icon="👔")
     pg_wedstrijden = st.Page("views/3_📊_Wedstrijden.py", title="Wedstrijden", icon="📊")
-    pg_scouting = st.Page("views/4_📝_Scouting.py"", title="Scouting", icon="📝") # Deze hadden we al hernoemd naar simpel
+    pg_scouting = st.Page("views/4_📝_Scouting.py", title="Scouting", icon="📝") 
     pg_discover = st.Page("views/5_🔎_Discover.py", title="Discover", icon="🔎")
     pg_aangeboden = st.Page("views/6_📥_Aangeboden.py", title="Aangeboden", icon="📥")
 
