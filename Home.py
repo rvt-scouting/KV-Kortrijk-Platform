@@ -57,7 +57,7 @@ else:
     # Voor nu gebruiken we even een simpele functie als startpagina
     def welcome_page():
         st.title(f"Welkom, {st.session_state.user_info['naam']}")
-        st.write(f"Rol: {st.session_state.user_info['rol_in_club']}")
+        st.write(f"Rol: {st.session_state.user_info['rol']}")
         st.info("Selecteer een module in het menu links.")
         if st.button("Uitloggen"):
             logout()
