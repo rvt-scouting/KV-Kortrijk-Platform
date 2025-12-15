@@ -225,13 +225,12 @@ try:
                 if not df_k1.empty: st.caption("Aan de Bal"); st.dataframe(df_k1.style.applymap(highlight_high_scores, subset=['Score']), use_container_width=True, hide_index=True)
                 if not df_k2.empty: st.caption("Zonder Bal"); st.dataframe(df_k2.style.applymap(highlight_high_scores, subset=['Score']), use_container_width=True, hide_index=True)
 
-# =========================================================================
-        # NIEUW: FYSIEKE DATA (SKILLCORNER)
+        # =========================================================================
+        # FYSIEKE DATA (SKILLCORNER)
         # =========================================================================
         st.markdown("---")
         st.subheader("💪 Fysieke Data (SkillCorner)")
         
-        # We halen specifieke kolommen op met alias, EN alle ruwe data (*) voor de details
         q_phys = """
             SELECT 
                 f.total_matches,
@@ -250,55 +249,69 @@ try:
             df_phys = run_query(q_phys, params=(str(final_player_id),))
             
             if not df_phys.empty:
-                # --- FIX: Verwijder dubbele kolommen ---
-                # (Omdat we 'total_matches' en '*' selecteren, komt die kolom 2x voor. 
-                # Styler kan daar niet tegen, dus we droppen de duplicaten hier.)
+                # Fix dubbele kolommen voor styler
                 df_phys = df_phys.loc[:, ~df_phys.columns.duplicated()]
 
-                # 1. Stylings functie voor A/B/C
+                # Stylings functie voor A/B/C
                 def color_physical_score(val):
                     val_str = str(val).strip().upper()
-                    if val_str == 'A':
-                        return 'color: #2ecc71; font-weight: bold' # Groen
-                    elif val_str == 'B':
-                        return 'color: #f1c40f; font-weight: bold' # Geel/Oranje
-                    elif val_str == 'C':
-                        return 'color: #e74c3c; font-weight: bold' # Rood
+                    if val_str == 'A': return 'color: #2ecc71; font-weight: bold' 
+                    elif val_str == 'B': return 'color: #f1c40f; font-weight: bold' 
+                    elif val_str == 'C': return 'color: #e74c3c; font-weight: bold' 
                     return ''
 
-                # 2. Hoofdtabel tonen
+                # Hoofdtabel
                 main_cols = ["total_matches", "PSV 99", "TTS", "Sprint Dis", "Sprint Cnt", "Tot. Dis"]
+                df_phys_main = df_phys[[c for c in main_cols if c in df_phys.columns]].copy()
                 
-                # Zorg dat de kolommen bestaan (veiligheid)
-                existing_main_cols = [c for c in main_cols if c in df_phys.columns]
-                df_phys_main = df_phys[existing_main_cols].copy()
+                st.dataframe(df_phys_main.style.applymap(color_physical_score), use_container_width=True, hide_index=True)
                 
-                st.dataframe(
-                    df_phys_main.style.applymap(color_physical_score),
-                    use_container_width=True,
-                    hide_index=True
-                )
-                
-                # 3. Uitklapbaar detail menu
+                # Uitklapbaar
                 with st.expander("📊 Toon ALLE fysieke scores"):
-                    # Zoek alle kolommen die eindigen op '_score'
-                    # We sluiten de kolommen uit die we hierboven al als Alias hebben getoond om verwarring te voorkomen
                     score_cols = [c for c in df_phys.columns if c.endswith('_score')]
-                    
                     if score_cols:
-                        df_phys_all = df_phys[score_cols].copy()
-                        st.dataframe(
-                            df_phys_all.style.applymap(color_physical_score),
-                            use_container_width=True,
-                            hide_index=True
-                        )
-                    else:
-                        st.info("Geen detail scores gevonden.")
-            else:
-                st.info("Geen fysieke data gekoppeld voor deze speler.")
+                        st.dataframe(df_phys[score_cols].style.applymap(color_physical_score), use_container_width=True, hide_index=True)
+                    else: st.info("Geen detail scores.")
+            else: st.info("Geen fysieke data gekoppeld.")
+        except Exception as e: st.error(f"Fout fysieke data: {e}")
+
+        # =========================================================================
+        # INTERNE RAPPORTEN (TERUG TOEGEVOEGD!)
+        # =========================================================================
+        st.markdown("---")
+        st.subheader("🕵️ Scouting Rapporten (Intern)")
+        scouting_query = """
+            SELECT s.naam as "Scout", r.aangemaakt_op as "Datum", r.positie_gespeeld as "Positie", r.profiel_code as "Profiel",
+                r.beoordeling as "Rating", r.advies as "Advies", r.rapport_tekst, r.gouden_buzzer, COALESCE(m.id::text, r.custom_wedstrijd_naam) as "Wedstrijd_Ref"
+            FROM scouting.rapporten r
+            LEFT JOIN scouting.gebruikers s ON r.scout_id = s.id
+            LEFT JOIN public.matches m ON r.wedstrijd_id = m.id
+            WHERE r.speler_id = %s
+            ORDER BY r.aangemaakt_op DESC
+        """
+        try:
+            df_internal = run_query(scouting_query, params=(str(final_player_id),))
+            if not df_internal.empty:
+                display_cols = ["Datum", "Scout", "Positie", "Profiel", "Rating", "Advies"]
+                df_disp = df_internal.copy()
+                df_disp['Datum'] = pd.to_datetime(df_disp['Datum']).dt.strftime('%d-%m-%Y')
                 
-        except Exception as e:
-            st.error(f"Fout fysieke data: {e}")
+                def highlight_rows(row):
+                    return ['background-color: #fff9c4'] * len(row) if row.name in df_internal[df_internal['gouden_buzzer']==True].index else [''] * len(row)
+
+                st.dataframe(df_disp[display_cols], use_container_width=True, hide_index=True)
+                
+                with st.expander("📖 Lees volledige rapport teksten"):
+                    for idx, row in df_internal.iterrows():
+                        date_str = pd.to_datetime(row['Datum']).strftime('%d-%m-%Y')
+                        icon = "🏆" if row['gouden_buzzer'] else "📝"
+                        rating_str = f"({row['Rating']}/10)" if row['Rating'] else ""
+                        st.markdown(f"**{icon} {date_str} - {row['Scout']} {rating_str}**")
+                        if row['rapport_tekst']: st.info(row['rapport_tekst'])
+                        else: st.caption("Geen tekst.")
+                        st.markdown("---")
+            else: st.info("Nog geen interne scouting rapporten.")
+        except Exception as e: st.error(f"Fout: {e}")
 
         # EXTERNE RAPPORTEN
         st.markdown("---"); st.subheader("📑 Data Scout Rapporten (Extern)")
