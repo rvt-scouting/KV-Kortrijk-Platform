@@ -113,9 +113,19 @@ else:
     pg = st.navigation(pages_dict)
     pg.run()
     
-# --- E. SIDEBAR FOOTER ---
+# --- E. SIDEBAR FOOTER (DEBUG VERSIE) ---
     with st.sidebar:
         st.divider()
         st.write(f"👤 **{st.session_state.user_info['naam']}**")
+        
+        # --- DEBUG INFO START ---
+        raw = st.session_state.user_info.get('toegangsniveau', 'Niet gevonden')
+        st.code(f"DB Niveau: {raw}\nType: {type(raw)}")
+        st.code(f"Modules: {len(modules)}")
+        if st.button("🗑️ Cache Legen"):
+            st.cache_data.clear()
+            st.rerun()
+        # --- DEBUG INFO EINDE ---
+
         if st.button("Uitloggen", key="logout_btn"):
             logout()
