@@ -5,7 +5,7 @@ import numpy as np
 # IMPORT DE FUNCTIES UIT UTILS.PY
 from utils import run_query, get_config_for_position, POSITION_METRICS, POSITION_KPIS
 
-st.set_page_config(page_title="Spelers & Teams", page_icon="⚽", layout="wide")
+#st.set_page_config(page_title="Spelers & Teams", page_icon="⚽", layout="wide")
 
 # --- NAVIGATIE LOGICA ---
 if "pending_nav" in st.session_state:
