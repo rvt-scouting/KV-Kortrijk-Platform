@@ -68,12 +68,15 @@ else:
     # --- A. DEFINIEER PAGINA'S (Check of deze bestandsnamen EXACT kloppen in GitHub!) ---
     pg_welcome = st.Page(welcome_page, title="Home", icon="🏠")
     
-    pg_spelers = st.Page("pages/1_⚽_Spelers_en_Teams.py", title="Spelers & Teams", icon="⚽")
-    pg_coaches = st.Page("pages/2_👔_Coaches.py", title="Coaches", icon="👔")
-    pg_wedstrijden = st.Page("pages/3_📊_Wedstrijden.py", title="Wedstrijden", icon="📊")
-    pg_scouting = st.Page("pages/4_📝_Scouting.py", title="Scouting", icon="📝")
-    pg_discover = st.Page("pages/5_🔎_Discover.py", title="Discover", icon="🔎")
-    pg_aangeboden = st.Page("pages/6_📥_Aangeboden.py", title="Aangeboden", icon="📥")
+# Let op: check of je bestandsnamen nog kloppen!
+    # Als je bij het hernoemen de "1_⚽_" hebt weggehaald, pas dat hier dan ook aan.
+    
+    pg_spelers = st.Page("views/1_⚽_Spelers_en_Teams.py", title="Spelers & Teams", icon="⚽")
+    pg_coaches = st.Page("views/2_👔_Coaches.py", title="Coaches", icon="👔")
+    pg_wedstrijden = st.Page("views/3_📊_Wedstrijden.py", title="Wedstrijden", icon="📊")
+    pg_scouting = st.Page("views/scouting.py", title="Scouting", icon="📝") # Deze hadden we al hernoemd naar simpel
+    pg_discover = st.Page("views/5_🔎_Discover.py", title="Discover", icon="🔎")
+    pg_aangeboden = st.Page("views/6_📥_Aangeboden.py", title="Aangeboden", icon="📥")
 
     # --- B. BEPAAL RECHTEN ---
     raw_level = st.session_state.user_info.get('toegangsniveau', 0)
