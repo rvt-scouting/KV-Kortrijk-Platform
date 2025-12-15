@@ -229,6 +229,7 @@ with col_list:
         pid = str(row['player_id'])
         pname = f"{int(row['shirt_number'])}. {row['commonname']}"
         
+        # Check draft
         dkey = f"{selected_match_id}_{pid}_{current_scout_id}"
         has_draft = dkey in st.session_state.scout_drafts
         
@@ -254,7 +255,6 @@ with col_editor:
             
             if not existing.empty:
                 rec = existing.iloc[0]
-                # Lezen uit DB: gebruik 'gouden_buzzer'
                 gval = bool(rec['gouden_buzzer']) if 'gouden_buzzer' in rec else False
                 
                 st.session_state.scout_drafts[draft_key] = {
@@ -263,7 +263,6 @@ with col_editor:
                     "tekst": rec['rapport_tekst'] or "", "gouden_buzzer": gval, "shortlist": rec['shortlist_id']
                 }
             else:
-                # Initieer leeg draft: OOK HIER 'gouden_buzzer' GEBRUIKEN!
                 st.session_state.scout_drafts[draft_key] = {
                     "positie": None, "profiel": None, "advies": None,
                     "rating": 6, "tekst": "", "gouden_buzzer": False, "shortlist": None
@@ -271,7 +270,9 @@ with col_editor:
         
         draft = st.session_state.scout_drafts[draft_key]
 
-        # --- FORMULIER ---
+        # --- FORMULIER MET DYNAMISCHE KEYS ---
+        # Door de active_pid in de key te steken, forceer je een refresh bij spelerwissel!
+        
         c1, c2 = st.columns(2)
         def get_idx(val, opts): return opts.index(val) if val in opts else 0
 
@@ -280,47 +281,48 @@ with col_editor:
             pos_lbls = opties_posities['label'].tolist()
             curr_pos = draft['positie']
             idx_pos = pos_opts.index(curr_pos) if curr_pos in pos_opts else 0
-            new_pos = st.selectbox("Positie", pos_opts, index=idx_pos, format_func=lambda x: pos_lbls[pos_opts.index(x)] if x in pos_opts else x, key="inp_pos")
+            new_pos = st.selectbox("Positie", pos_opts, index=idx_pos, format_func=lambda x: pos_lbls[pos_opts.index(x)] if x in pos_opts else x, key=f"inp_pos_{active_pid}")
             
-            new_rating = st.slider("Beoordeling (1-10)", 1, 10, draft["rating"], key="inp_rate")
+            new_rating = st.slider("Beoordeling (1-10)", 1, 10, draft["rating"], key=f"inp_rate_{active_pid}")
 
         with c2:
             adv_opts = opties_advies['value'].tolist()
             adv_lbls = opties_advies['label'].tolist()
             curr_adv = draft['advies']
             idx_adv = adv_opts.index(curr_adv) if curr_adv in adv_opts else 0
-            new_adv = st.selectbox("Advies", adv_opts, index=idx_adv, format_func=lambda x: adv_lbls[adv_opts.index(x)] if x in adv_opts else x, key="inp_adv")
+            new_adv = st.selectbox("Advies", adv_opts, index=idx_adv, format_func=lambda x: adv_lbls[adv_opts.index(x)] if x in adv_opts else x, key=f"inp_adv_{active_pid}")
 
             prof_opts = opties_profielen['value'].tolist()
             prof_lbls = opties_profielen['label'].tolist()
             curr_prof = draft['profiel']
             idx_prof = prof_opts.index(curr_prof) if curr_prof in prof_opts else 0
-            new_prof = st.selectbox("Profiel", prof_opts, index=idx_prof, format_func=lambda x: prof_lbls[prof_opts.index(x)] if x in prof_opts else x, key="inp_prof")
+            new_prof = st.selectbox("Profiel", prof_opts, index=idx_prof, format_func=lambda x: prof_lbls[prof_opts.index(x)] if x in prof_opts else x, key=f"inp_prof_{active_pid}")
 
-        new_tekst = st.text_area("Rapportage", draft["tekst"], height=200, key="inp_txt")
+        new_tekst = st.text_area("Rapportage", draft["tekst"], height=200, key=f"inp_txt_{active_pid}")
         
         ce1, ce2 = st.columns(2)
         with ce1: 
-            # Checkbox leest nu de juiste key
-            new_gouden = st.checkbox("🏆 Gouden Buzzer", draft["gouden_buzzer"], key="inp_gold")
+            new_gouden = st.checkbox("🏆 Gouden Buzzer", draft["gouden_buzzer"], key=f"inp_gold_{active_pid}")
         with ce2:
             sl_opts = [None] + opties_shortlists['value'].tolist()
             sl_lbls = ["Geen"] + opties_shortlists['label'].tolist()
             curr_sl = draft['shortlist']
             idx_sl = sl_opts.index(curr_sl) if curr_sl in sl_opts else 0
+            
             def fmt_sl(x):
                 try: return sl_lbls[sl_opts.index(x)]
                 except: return "Geen"
-            new_sl = st.selectbox("Shortlist", sl_opts, index=idx_sl, format_func=fmt_sl, key="inp_sl")
+            
+            new_sl = st.selectbox("Shortlist", sl_opts, index=idx_sl, format_func=fmt_sl, key=f"inp_sl_{active_pid}")
 
-        # Update draft met juiste key
+        # Update draft
         st.session_state.scout_drafts[draft_key] = {
             "positie": new_pos, "profiel": new_prof, "advies": new_adv,
             "rating": new_rating, "tekst": new_tekst, "gouden_buzzer": new_gouden, "shortlist": new_sl
         }
 
         st.markdown("---")
-        if st.button("💾 Rapport Opslaan", type="primary", use_container_width=True):
+        if st.button("💾 Rapport Opslaan", type="primary", use_container_width=True, key=f"btn_save_{active_pid}"):
             save_data = {
                 "scout_id": current_scout_id, "speler_id": active_pid,
                 "wedstrijd_id": selected_match_id, "competitie_id": selected_comp_id,
