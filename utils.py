@@ -26,7 +26,7 @@ def run_query(query, params=None):
         conn.close()
 
 # -----------------------------------------------------------------------------
-# 2. ALGEMENE SIDEBAR (DE FUNCTIE DIE MISTE!)
+# 2. ALGEMENE SIDEBAR
 # -----------------------------------------------------------------------------
 def show_sidebar_filters():
     """
@@ -113,13 +113,14 @@ def get_config_for_position(db_position, config_dict):
     elif pos in ["CENTER_FORWARD", "STRIKER"]: return config_dict.get('center_forward')
     return None
 
-# utils.py (alleen dit stukje aanpassen)
-
+# -----------------------------------------------------------------------------
+# 4. LOGIN FUNCTIE
+# -----------------------------------------------------------------------------
 def check_login(email, password):
     """
-    Checkt of gebruiker bestaat in scouting.gebruikers
+    Checkt of gebruiker bestaat in scouting.gebruikers en haalt info op.
     """
-    # We kijken nu in de NIEUWE tabel
+    # Dit moet matchen met je Admin pagina tabel:
     query = """
         SELECT id, naam, rol, toegangsniveau 
         FROM scouting.gebruikers 
@@ -128,6 +129,7 @@ def check_login(email, password):
     df = run_query(query, params=(email, password))
     
     if not df.empty:
+        # Geeft een dictionary terug, bv: {'id': 1, 'naam': 'Jan', 'rol': 'Scout', 'toegangsniveau': 1}
         return df.iloc[0].to_dict()
     else:
         return None
