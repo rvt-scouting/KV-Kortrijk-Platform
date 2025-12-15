@@ -57,12 +57,12 @@ st.title(f"🏟️ {match_row['home']} vs {match_row['away']}")
 st.caption(f"Datum: {match_row['scheduledDate'].strftime('%d-%m-%Y %H:%M')}")
 
 # -----------------------------------------------------------------------------
-# 2. DATA OPHALEN (UPDATED JSON PATHS)
+# 2. DATA OPHALEN (UPDATED JSON PATHS & JOIN FIX)
 # -----------------------------------------------------------------------------
 @st.cache_data
 def get_match_events(match_id):
-    # LET OP: We gebruiken nu de nested paden: start -> 'coordinates' ->> 'x'
-    # En we joinen players p om de naam te krijgen via player ->> 'id'
+    # FIX: We joinen players p nu op basis van TEXT vergelijking
+    # e.player ->> 'id' geeft tekst terug. p.id casten we naar tekst voor zekerheid.
     q = """
         SELECT 
             e.id,
@@ -71,7 +71,7 @@ def get_match_events(match_id):
             e.action,
             e."actionType",
             e.result,
-            p.commonname as "Speler",
+            COALESCE(p.commonname, e.player ->> 'name', 'Onbekend') as "Speler",
             
             -- Tijd data
             (e."gameTime" ->> 'gameTime') as "Tijd",
@@ -91,7 +91,7 @@ def get_match_events(match_id):
 
         FROM public.match_events e
         LEFT JOIN public.squads sq ON e."squadId" = sq.id
-        LEFT JOIN public.players p ON CAST(e.player ->> 'id' AS INTEGER) = p.id
+        LEFT JOIN public.players p ON (e.player ->> 'id') = CAST(p.id AS TEXT)
         WHERE e."matchId" = %s
         ORDER BY e.index ASC
     """
@@ -114,17 +114,19 @@ with tab1:
     home_id = match_row['homeSquadId']
     away_id = match_row['awaySquadId']
 
+    # Home Score: Goals door Home + Own Goals door Away
     goals_home = df_events[(df_events['squadId'] == home_id) & (df_events['action'] == 'Goal') & (df_events['result'] == 'Success')]
     own_goals_away = df_events[(df_events['squadId'] == away_id) & (df_events['action'] == 'Own Goal') & (df_events['result'] == 'Success')]
     score_home = len(goals_home) + len(own_goals_away)
 
+    # Away Score: Goals door Away + Own Goals door Home
     goals_away = df_events[(df_events['squadId'] == away_id) & (df_events['action'] == 'Goal') & (df_events['result'] == 'Success')]
     own_goals_home = df_events[(df_events['squadId'] == home_id) & (df_events['action'] == 'Own Goal') & (df_events['result'] == 'Success')]
     score_away = len(goals_away) + len(own_goals_home)
 
     c1, c2, c3 = st.columns([1, 2, 1])
     with c2:
-        st.markdown(f"<h1 style='text-align: center; border: 2px solid #ddd; border-radius:10px; padding:10px;'>{score_home} - {score_away}</h1>", unsafe_allow_html=True)
+        st.markdown(f"<h1 style='text-align: center; border: 2px solid #ddd; border-radius:10px; padding:10px; background-color: #f8f9fa;'>{score_home} - {score_away}</h1>", unsafe_allow_html=True)
         st.caption("Eindstand (inclusief eigen doelpunten)")
 
     # B. Tijdlijn
@@ -149,9 +151,10 @@ with tab1:
     
     with c_xt1:
         # Totaal xT per team
-        xt_stats = df_events.groupby('Team')['xT'].sum().reset_index()
-        fig_xt = px.bar(xt_stats, x='Team', y='xT', title="Expected Threat (xT) Totaal", color='Team')
-        st.plotly_chart(fig_xt, use_container_width=True)
+        if 'xT' in df_events.columns:
+            xt_stats = df_events.groupby('Team')['xT'].sum().reset_index()
+            fig_xt = px.bar(xt_stats, x='Team', y='xT', title="Expected Threat (xT) Totaal", color='Team')
+            st.plotly_chart(fig_xt, use_container_width=True)
         
     with c_xt2:
         # Passen
@@ -194,8 +197,7 @@ with tab2:
     if not df_m.empty:
         fig = go.Figure()
 
-        # VELD ACHTERGROND (105x68 Standaard, maar data lijkt 100x100 genormaliseerd)
-        # We gebruiken 0-100 op basis van je voorbeeld: {"x": 38.1, "y": 26.6}
+        # VELD ACHTERGROND (105x68 Standaard, genormaliseerd 0-100)
         fig.add_shape(type="rect", x0=0, y0=0, x1=100, y1=100, line=dict(color="white"), fillcolor="#4CAF50", layer="below")
         fig.add_shape(type="line", x0=50, y0=0, x1=50, y1=100, line=dict(color="white", width=2))
         fig.add_shape(type="circle", x0=40, y0=40, x1=60, y1=60, line=dict(color="white", width=2))
@@ -221,9 +223,7 @@ with tab2:
             
             # LIJNEN (Voor passes of runs)
             if show_lines:
-                # We moeten per rij een lijn trekken. Plotly doet dit het snelst door None toe te voegen tussen lijnen
-                # Maar voor performance doen we het hier alleen als er < 500 events zijn
-                if len(dft) < 500:
+                if len(dft) < 1000: # Performance limit
                     for _, row in dft.iterrows():
                         if pd.notnull(row['x_end']) and pd.notnull(row['y_end']):
                             fig.add_trace(go.Scatter(
@@ -235,7 +235,6 @@ with tab2:
                                 showlegend=False,
                                 hoverinfo='skip'
                             ))
-                            # Eventueel een pijlpunt (annotation) is zwaar voor de browser bij veel data
                 else:
                     st.caption(f"⚠️ Te veel events ({len(dft)}) om lijnen te tekenen voor {team}. Filter meer.")
 
