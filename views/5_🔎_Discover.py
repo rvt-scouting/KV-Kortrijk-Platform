@@ -1,93 +1,177 @@
 import streamlit as st
 import plotly.express as px
-from utils import run_query, show_sidebar_filters
+import pandas as pd
+from utils import run_query
 
-# Pagina configuratie
+# -----------------------------------------------------------------------------
+# 1. SETUP & CONFIGURATIE
+# -----------------------------------------------------------------------------
 st.set_page_config(page_title="Discover", page_icon="🔎", layout="wide")
 st.title("🔎 Discover & Data Visualisatie")
 
-# 1. Filters uit de sidebar halen (via utils)
-selected_season, selected_iteration_id = show_sidebar_filters()
+# -----------------------------------------------------------------------------
+# 2. CUSTOM SIDEBAR (Specifiek voor Discover)
+# -----------------------------------------------------------------------------
+st.sidebar.header("1. Selecteer Data")
 
-if not selected_iteration_id:
-    st.info("👈 Selecteer links een seizoen en competitie om te beginnen.")
+# A. Seizoen (Verplicht)
+season_query = "SELECT DISTINCT season FROM public.iterations ORDER BY season DESC;"
+try:
+    df_seasons = run_query(season_query)
+    seasons_list = df_seasons['season'].tolist()
+    # Sessie status behouden als die er is
+    idx = 0
+    if "sb_season" in st.session_state and st.session_state.sb_season in seasons_list:
+        idx = seasons_list.index(st.session_state.sb_season)
+    
+    selected_season = st.sidebar.selectbox("Seizoen:", seasons_list, index=idx, key="sb_season")
+except Exception as e:
+    st.error("Kon seizoenen niet laden.")
     st.stop()
 
-# 2. Data ophalen
-# We gebruiken nu directe joins omdat de IDs allemaal tekst zijn.
+# B. Competitie (Optioneel / Multiselect logic)
+# We halen alle iteraties op voor dit seizoen
+iter_query = """
+    SELECT id, "competitionName" 
+    FROM public.iterations 
+    WHERE season = %s 
+    ORDER BY "competitionName"
+"""
+df_iters = run_query(iter_query, params=(selected_season,))
+
+if df_iters.empty:
+    st.warning("Geen competities gevonden voor dit seizoen.")
+    st.stop()
+
+# We maken een lijst met "Alle" als eerste optie
+comp_options = ["Alle Competities"] + df_iters['competitionName'].tolist()
+selected_comp_name = st.sidebar.selectbox("Competitie:", comp_options)
+
+# C. Bepaal welke IDs we moeten ophalen
+target_ids = []
+if selected_comp_name == "Alle Competities":
+    # Pak alle IDs van dit seizoen
+    target_ids = df_iters['id'].tolist()
+    st.sidebar.caption(f"Je kijkt nu naar data van {len(target_ids)} competities.")
+else:
+    # Pak enkel de ID van de gekozen competitie
+    target_ids = df_iters[df_iters['competitionName'] == selected_comp_name]['id'].tolist()
+
+# Zorg dat ids strings zijn voor de tuple (nodig voor SQL IN clause)
+target_ids_tuple = tuple(str(x) for x in target_ids)
+
+st.sidebar.divider()
+
+# -----------------------------------------------------------------------------
+# 3. DATA OPHALEN
+# -----------------------------------------------------------------------------
 @st.cache_data
-def get_analysis_data(iter_id):
+def get_analysis_data(ids_tuple):
+    # We joinen nu ook iterations om de competitienaam te hebben in de data
+    # Let op de syntax voor IN %s in python/sql
     query = """
         SELECT 
             p.commonname as "Naam", 
             sq.name as "Team", 
+            i."competitionName" as "Competitie",
             a.* FROM analysis.final_impect_scores a
         JOIN public.players p ON a."playerId" = p.id
         LEFT JOIN public.squads sq ON a."squadId" = sq.id
-        WHERE a."iterationId" = %s
+        JOIN public.iterations i ON a."iterationId" = i.id
+        WHERE a."iterationId" IN %s
     """
-    # We sturen iter_id als parameter mee (string)
-    return run_query(query, params=(str(iter_id),))
+    return run_query(query, params=(ids_tuple,))
 
-df = get_analysis_data(selected_iteration_id)
+# Ophalen
+df = get_analysis_data(target_ids_tuple)
+
+if df.empty:
+    st.warning("Geen data gevonden voor de geselecteerde criteria.")
+    st.stop()
+
+# -----------------------------------------------------------------------------
+# 4. GRAFIEK INSTELLINGEN
+# -----------------------------------------------------------------------------
+# Automatisch numerieke kolommen vinden (exclusief IDs)
+exclude_cols = ['playerId', 'squadId', 'iterationId', 'Naam', 'Team', 'Competitie', 'position', 'birthdate']
+numeric_cols = [c for c in df.columns if c not in exclude_cols and pd.api.types.is_numeric_dtype(df[c])]
+numeric_cols.sort()
+
+# Layout met kolommen
+c1, c2, c3, c4 = st.columns(4)
+
+with c1:
+    st.markdown("##### 📍 Assen")
+    x_axis = st.selectbox("X-As", numeric_cols, index=0 if len(numeric_cols) > 0 else 0)
+    # Probeer slim een andere Y te kiezen dan X
+    def_y = 1 if len(numeric_cols) > 1 else 0
+    y_axis = st.selectbox("Y-As", numeric_cols, index=def_y)
+
+with c2:
+    st.markdown("##### 🎨 Stijl")
+    # Kleur optie toevoegen
+    color_options = ["Team", "position", "Competitie"]
+    color_by = st.selectbox("Kleur bolletjes op basis van:", color_options, index=0)
+
+with c3:
+    st.markdown("##### 🕵️ Filter Positie")
+    if 'position' in df.columns:
+        positions = ["Alle"] + sorted(df['position'].dropna().unique().tolist())
+        sel_pos = st.selectbox("Kies positie:", positions)
+        if sel_pos != "Alle":
+            df = df[df['position'] == sel_pos]
+
+with c4:
+    st.markdown("##### 🛡️ Filter Teams")
+    all_teams = sorted(df['Team'].dropna().unique().tolist())
+    # Standaard niets geselecteerd = alles tonen
+    sel_teams = st.multiselect("Specifieke teams (leeg = alles):", all_teams)
+    if sel_teams:
+        df = df[df['Team'].isin(sel_teams)]
+
+# -----------------------------------------------------------------------------
+# 5. VISUALISATIE
+# -----------------------------------------------------------------------------
+st.divider()
 
 if not df.empty:
-    # 3. Automatisch numerieke kolommen vinden voor de assen
-    # We filteren kolommen die 'score' bevatten en negeren IDs
-    score_cols = [c for c in df.columns if 'score' in c.lower() and c not in ['playerId', 'squadId', 'iterationId']]
-    
-    if not score_cols:
-        st.error("Geen score-kolommen gevonden in de tabel.")
-        st.stop()
-        
-    st.divider()
-    
-    # 4. Instellingen voor de grafiek
-    col_filters, col_x, col_y = st.columns([1, 1, 1])
-    
-    with col_filters:
-        st.markdown("##### 1. Filter Data")
-        # Optioneel: filter op positie als die kolom bestaat
-        if 'position' in df.columns:
-            posities = ["Alle"] + sorted(df['position'].dropna().unique().tolist())
-            filter_pos = st.selectbox("Positie", posities)
-            if filter_pos != "Alle":
-                df = df[df['position'] == filter_pos]
-    
-    with col_x:
-        st.markdown("##### 2. X-As")
-        x_axis = st.selectbox("Kies statistiek X", score_cols, index=0)
-        
-    with col_y:
-        st.markdown("##### 3. Y-As")
-        # Probeer slim de tweede kolom als default te pakken
-        default_y_index = 1 if len(score_cols) > 1 else 0
-        y_axis = st.selectbox("Kies statistiek Y", score_cols, index=default_y_index)
+    # Titel dynamisch maken
+    chart_title = f"{x_axis} vs {y_axis} | {selected_season}"
+    if selected_comp_name != "Alle Competities":
+        chart_title += f" ({selected_comp_name})"
 
-    # 5. Scatter Plot Genereren
-    if not df.empty:
-        fig = px.scatter(
-            df, 
-            x=x_axis, 
-            y=y_axis, 
-            hover_data=['Naam', 'Team'], # Wat zie je als je muist?
-            color='Team',                # Kleur bolletjes per team
-            title=f"{x_axis} vs {y_axis} ({selected_season})",
-            height=600,
-            template="plotly_white"      # Schone witte achtergrond
+    fig = px.scatter(
+        df, 
+        x=x_axis, 
+        y=y_axis, 
+        color=color_by,  # Dynamische kleur
+        hover_data=['Naam', 'Team', 'Competitie', 'position'], 
+        title=chart_title,
+        height=700,
+        template="plotly_white",
+        text='Naam' if len(df) < 50 else None # Alleen namen tonen als er weinig punten zijn
+    )
+    
+    # Styling
+    fig.update_traces(
+        marker=dict(size=12, line=dict(width=1, color='DarkSlateGrey')),
+        textposition='top center'
+    )
+    
+    # Als er veel teams zijn, de legenda misschien verbergen of aanpassen?
+    # Voor nu laten we hem staan, Plotly handelt dit best goed af.
+    
+    st.plotly_chart(fig, use_container_width=True)
+
+    # -------------------------------------------------------------------------
+    # 6. DETAIL TABEL
+    # -------------------------------------------------------------------------
+    with st.expander("📄 Bekijk bron data van selectie"):
+        show_cols = ['Naam', 'Team', 'position', 'Competitie', x_axis, y_axis]
+        st.dataframe(
+            df[show_cols].sort_values(by=x_axis, ascending=False),
+            use_container_width=True
         )
-        
-        # Maak de bolletjes iets groter en duidelijker
-        fig.update_traces(marker=dict(size=10, line=dict(width=1, color='DarkSlateGrey')))
-        
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.warning("Geen spelers overgebleven na filteren.")
-
-    # 6. Ruwe data tabel (in een uitklapmenu om het netjes te houden)
-    with st.expander("Bekijk de tabel"):
-        display_cols = ['Naam', 'Team'] + ([x_axis, y_axis] if x_axis != y_axis else [x_axis])
-        st.dataframe(df[display_cols].sort_values(by=x_axis, ascending=False))
 
 else:
-    st.error("Geen data gevonden voor deze competitie. Check of de iterationId's in de tabellen overeenkomen.")
+    st.error("Geen spelers overgebleven na filters.")
