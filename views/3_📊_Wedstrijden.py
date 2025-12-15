@@ -121,13 +121,14 @@ with st.spinner("Bezig met analyseren..."):
 if df_events.empty: st.warning("Geen data."); st.stop()
 
 # -----------------------------------------------------------------------------
-# 3. GEAVANCEERDE xT BEREKENING (DELTA)
+# 3. VERWERKING & LOGICA
 # -----------------------------------------------------------------------------
 df_events['action_clean'] = df_events['action'].astype(str).str.upper().str.strip()
 df_events['result_clean'] = df_events['result'].astype(str).str.upper().str.strip()
 home_id_str = normalize_id(match_row['homeSquadId'])
 df_events['squadId_clean'] = df_events['squadId'].apply(normalize_id)
 
+# xT
 df_events['xT_Team_Raw'] = df_events['xT_Team_Raw'].fillna(0)
 df_events['xT_Opp_Raw'] = df_events['xT_Opp_Raw'].fillna(0)
 
@@ -142,14 +143,12 @@ df_events['xT_Generated_Raw'] = df_events['Home_Net_Threat_State'].shift(-1) - d
 
 def calc_player_xt(row):
     if pd.isna(row['xT_Generated_Raw']): return 0.0
-    if row['squadId_clean'] == home_id_str:
-        return row['xT_Generated_Raw']
-    else:
-        return -row['xT_Generated_Raw']
+    if row['squadId_clean'] == home_id_str: return row['xT_Generated_Raw']
+    else: return -row['xT_Generated_Raw']
 
 df_events['xT_Generated_Player'] = df_events.apply(calc_player_xt, axis=1)
 
-# BASIS KLEUREN TEAM
+# KLEUREN
 team_colors = {match_row['home']: '#e74c3c', match_row['away']: '#3498db', 'Onbekend': '#95a5a6'} 
 
 # -----------------------------------------------------------------------------
@@ -169,7 +168,7 @@ with tab1:
 
     st.markdown(f"<h1 style='text-align: center; color: #333;'>{match_row['home']} {score_home} - {score_away} {match_row['away']}</h1>", unsafe_allow_html=True)
 
-    # --- TIJDLIJN (Met kleuren) ---
+    # --- TIJDLIJN ---
     col_tl, col_st = st.columns([3, 2])
     with col_tl:
         st.subheader("Wedstrijdverloop")
@@ -177,17 +176,15 @@ with tab1:
         imp = df_events[mask_hl].copy()
         
         if not imp.empty:
-            # Event kleuren
             event_colors = {
                 "GOAL": "#2ecc71", "OWN_GOAL": "#e74c3c", 
                 "CARD": "#f1c40f", "YELLOW_CARD": "#f1c40f", "RED_CARD": "#c0392b",
                 "SUBSTITUTION": "#3498db"
             }
-            
             fig_tl = px.scatter(imp, x="Minuut", y="Team", color="action_clean", symbol="action_clean",
                                 color_discrete_map=event_colors, size_max=15, hover_data=["Speler"])
             fig_tl.update_traces(marker=dict(size=14, line=dict(width=1, color='DarkSlateGrey')))
-            fig_tl.update_layout(height=350, showlegend=True) # Legende weer aan zodat je ziet wat de kleuren betekenen
+            fig_tl.update_layout(height=350, showlegend=True)
             st.plotly_chart(fig_tl, use_container_width=True)
         else: st.info("Geen hoogtepunten.")
 
@@ -202,25 +199,43 @@ with tab1:
     st.divider()
     c1, c2 = st.columns(2)
     with c1:
-        st.write("**Total Expected Threat (xT) per Team**")
-        # Som van raw xT_Team per team (Creatie van gevaar)
+        st.write("**Total Expected Threat (xT)**")
+        # Som van raw xT_Team per team (Creatie)
         xt_total = df_events.groupby('Team')['xT_Team_Raw'].sum().reset_index()
-        
         fig_xt = px.bar(xt_total, x='Team', y='xT_Team_Raw', color='Team', 
-                        color_discrete_map=team_colors, title="Totaal xT (Gevaar gecreëerd)")
+                        color_discrete_map=team_colors, title="Totaal Gecreëerde xT")
         st.plotly_chart(fig_xt, use_container_width=True)
 
     with c2:
-        st.write("**Pass Types**")
+        st.write("**Pass Types (Succesratio)**")
         passes = df_events[df_events['action_clean'].str.contains('PASS')].copy()
+        
         if not passes.empty:
-            pass_agg = passes.groupby(['Team', 'action_clean']).size().reset_index(name='Aantal')
-            fig_pass = px.bar(pass_agg, x='action_clean', y='Aantal', color='Team', barmode='group',
-                              color_discrete_map=team_colors)
+            # Groepeer per Team en Type
+            # We tellen Totaal en Succes
+            pass_agg = passes.groupby(['Team', 'action_clean']).agg(
+                Totaal=('action', 'count'),
+                Succes=('result_clean', lambda x: (x == 'SUCCESS').sum())
+            ).reset_index()
+            
+            # Melt voor side-by-side bar chart
+            df_melt = pass_agg.melt(id_vars=['Team', 'action_clean'], value_vars=['Totaal', 'Succes'], 
+                                    var_name='Status', value_name='Aantal')
+            
+            fig_pass = px.bar(
+                df_melt, x='action_clean', y='Aantal', 
+                color='Status', barmode='group',
+                facet_col='Team', # Splits per team
+                color_discrete_map={'Totaal': '#95a5a6', 'Succes': '#2ecc71'},
+                title="Passes: Totaal vs Succes"
+            )
+            fig_pass.update_xaxes(title=None, tickangle=-45)
             st.plotly_chart(fig_pass, use_container_width=True)
+        else:
+            st.info("Geen passes.")
 
 # -----------------------------------------------------------------------------
-# TAB 2: PITCH MAP
+# TAB 2: PITCH MAP (CORRECTE COORDINATEN -52.5 tot 52.5)
 # -----------------------------------------------------------------------------
 with tab2:
     st.subheader("📍 Event Map")
@@ -234,23 +249,49 @@ with tab2:
     
     if not df_m.empty:
         fig = go.Figure()
-        fig.add_shape(type="rect", x0=0, y0=0, x1=100, y1=100, line=dict(color="white"), fillcolor="#4CAF50", layer="below")
-        fig.add_shape(type="line", x0=50, y0=0, x1=50, y1=100, line=dict(color="white"))
         
+        # VELD CONFIGURATIE (Standaard Opta/SkillCorner range -52.5/52.5 en -34/34)
+        # Gras
+        fig.add_shape(type="rect", x0=-52.5, y0=-34, x1=52.5, y1=34, line=dict(color="white"), fillcolor="#4CAF50", layer="below")
+        
+        # Middenlijn & Cirkel
+        fig.add_shape(type="line", x0=0, y0=-34, x1=0, y1=34, line=dict(color="white"))
+        fig.add_shape(type="circle", x0=-9.15, y0=-9.15, x1=9.15, y1=9.15, line=dict(color="white"))
+        
+        # Boxen Links (-52.5)
+        fig.add_shape(type="rect", x0=-52.5, y0=-20.16, x1=-36, y1=20.16, line=dict(color="white")) # Grote box
+        fig.add_shape(type="rect", x0=-52.5, y0=-9.16, x1=-46.5, y1=9.16, line=dict(color="white")) # Kleine box
+        
+        # Boxen Rechts (52.5)
+        fig.add_shape(type="rect", x0=36, y0=-20.16, x1=52.5, y1=20.16, line=dict(color="white"))
+        fig.add_shape(type="rect", x0=46.5, y0=-9.16, x1=52.5, y1=9.16, line=dict(color="white"))
+
         for t in sel_teams:
             d = df_m[df_m['Team']==t]
-            fig.add_trace(go.Scatter(x=d['x_start'], y=d['y_start'], mode='markers', name=t,
-                                     marker=dict(color=team_colors.get(t,'grey'), size=8, line=dict(width=1,color='black')),
-                                     text=d['Speler']+" ("+d['action']+")"))
-        fig.update_layout(width=800, height=600, xaxis=dict(visible=False, range=[-5,105]), yaxis=dict(visible=False, range=[-5,105]))
+            fig.add_trace(go.Scatter(
+                x=d['x_start'], y=d['y_start'], 
+                mode='markers', name=t,
+                marker=dict(color=team_colors.get(t,'grey'), size=8, line=dict(width=1,color='black')),
+                text=d['Speler']+" ("+d['action']+")",
+                hovertemplate="%{text}<br>Tijd: %{customdata[0]}<br>X: %{x} Y: %{y}",
+                customdata=d[['TijdString']]
+            ))
+            
+        fig.update_layout(
+            width=800, height=550, 
+            xaxis=dict(visible=False, range=[-55, 55]), 
+            yaxis=dict(visible=False, range=[-36, 36], scaleanchor="x", scaleratio=1),
+            plot_bgcolor='rgba(0,0,0,0)'
+        )
         st.plotly_chart(fig, use_container_width=True)
+    else: st.info("Geen events met deze filters.")
 
 # -----------------------------------------------------------------------------
-# TAB 3: SPELERS xT (NIEUW)
+# TAB 3: SPELERS xT
 # -----------------------------------------------------------------------------
 with tab3:
     st.subheader("🏆 Top xT Generators")
-    st.caption("Som van xT verschil (Delta) per speler. Positief = Speler heeft situaties gevaarlijker gemaakt.")
+    st.caption("Som van xT verschil (Delta) per speler.")
     
     xt_stats = df_events[df_events['Speler']!='Onbekend'].groupby(['Speler', 'Team'])['xT_Generated_Player'].sum().reset_index()
     xt_stats = xt_stats.sort_values('xT_Generated_Player', ascending=False).head(20)
@@ -260,10 +301,10 @@ with tab3:
     with c2:
         fig_bar = px.bar(xt_stats, x='xT_Generated_Player', y='Speler', color='Team', orientation='h',
                          color_discrete_map=team_colors, title="Top 20 xT Spelers")
-        # MARGE FIX: Meer ruimte links voor namen
+        # MARGE VERGROTEN
         fig_bar.update_layout(
             yaxis={'categoryorder':'total ascending'},
-            margin=dict(l=150) 
+            margin=dict(l=150)
         )
         st.plotly_chart(fig_bar, use_container_width=True)
 
@@ -271,5 +312,5 @@ with tab3:
 # TAB 4: RAW
 # -----------------------------------------------------------------------------
 with tab4:
-    cols = ['Volgorde', 'Minuut', 'Team', 'Speler', 'action', 'xT_Generated_Player', 'Home_Net_Threat_State']
+    cols = ['Volgorde', 'Minuut', 'Team', 'Speler', 'action', 'result', 'xT_Generated_Player']
     st.dataframe(df_events[cols], use_container_width=True)
