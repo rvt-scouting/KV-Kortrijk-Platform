@@ -67,8 +67,8 @@ else:
     # De Modules (Verwijzend naar je bestanden in pages/)
     pg_spelers = st.Page("pages/1_⚽_Spelers_en_Teams.py", title="Spelers & Teams", icon="⚽")
     pg_coaches = st.Page("pages/2_👔_Coaches.py", title="Coaches", icon="👔")
-    pg_scouting = st.Page("pages/4_📝_Scouting.py", title="Scouting", icon="📝")
     pg_wedstrijden = st.Page("pages/3_📊_Wedstrijden.py", title="Wedstrijden", icon="📊")
+    pg_scouting = st.Page("pages/4_📝_Scouting.py", title="Scouting", icon="📝")
     pg_discover = st.Page("pages/5_🔎_Discover.py", title="Discover", icon="🔎")
     pg_aangeboden = st.Page("pages/6_📥_Aangeboden.py", title="Aangeboden", icon="📥")
 
