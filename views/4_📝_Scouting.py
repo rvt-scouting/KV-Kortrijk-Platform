@@ -13,8 +13,9 @@ st.set_page_config(page_title="Live Scouting", page_icon="📝", layout="wide")
 def get_scouting_options_safe(table_name):
     """ 
     Haalt opties op. Garandeert ALTIJD een dataframe met columns ['value', 'label'].
+    Werkt ook voor tabellen met 1 kolom (code).
     """
-    # Fallback
+    # Fallback data voor als de DB faalt of leeg is
     fallback_data = pd.DataFrame(columns=['value', 'label'])
     
     if "posities" in table_name:
@@ -32,14 +33,14 @@ def get_scouting_options_safe(table_name):
         
         cols = df.columns.tolist()
         
-        # Scenario 1: 1 kolom
+        # SCENARIO 1: Tabel heeft maar 1 kolom (bv. 'code')
         if len(cols) == 1:
             col_name = cols[0]
             df['value'] = df[col_name]
             df['label'] = df[col_name]
             return df[['value', 'label']]
 
-        # Scenario 2: Meerdere kolommen
+        # SCENARIO 2: Tabel heeft meerdere kolommen (ID + Label)
         candidates = ['naam', 'label', 'status', 'omschrijving', 'code']
         label_col = next((c for c in cols if c in candidates), cols[1])
         value_col = 'id' if 'id' in cols else cols[0]
@@ -56,6 +57,7 @@ def save_report_to_db(data):
         conn = init_connection()
         cur = conn.cursor()
         
+        # IDs casten naar string voor veiligheid
         p_scout = str(data['scout_id'])
         p_speler = str(data['speler_id'])
         p_match = str(data['wedstrijd_id'])
@@ -65,6 +67,7 @@ def save_report_to_db(data):
         existing = cur.fetchone()
         
         if existing:
+            # UPDATE
             update_q = """
                 UPDATE scouting.rapporten SET
                     positie_gespeeld = %s, profiel_code = %s, advies = %s,
@@ -78,6 +81,7 @@ def save_report_to_db(data):
                 data['shortlist_id'], existing[0]
             ))
         else:
+            # INSERT
             insert_q = """
                 INSERT INTO scouting.rapporten 
                 (scout_id, speler_id, wedstrijd_id, competitie_id, positie_gespeeld, 
@@ -100,20 +104,21 @@ def save_report_to_db(data):
     finally:
         if conn: conn.close()
 
-# Initialisaties
+# Initialisaties Session State
 if "scout_drafts" not in st.session_state: st.session_state.scout_drafts = {}
 if 'user_info' not in st.session_state or not st.session_state.user_info:
     st.warning("⚠️ Log in AUB."); st.stop()
 
+# Scout info veilig ophalen
 current_scout_id = str(st.session_state.user_info.get('id', '0'))
 current_scout_name = st.session_state.user_info.get('naam', 'Onbekend')
 
------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 # 2. WEDSTRIJD SELECTIE
 # -----------------------------------------------------------------------------
 st.title("📝 Live Match Scouting")
 
-# Initialiseer variabelen om NameError te voorkomen
+# Variabelen vooraf initialiseren om NameErrors te voorkomen
 sel_season = None
 sel_comp = None
 selected_match_id = None
@@ -121,7 +126,7 @@ selected_comp_id = None
 home_team_name = "Thuis"
 away_team_name = "Uit"
 
-# Haal opties op (Veilige functie)
+# Opties laden
 opties_posities = get_scouting_options_safe('opties_posities')
 opties_profielen = get_scouting_options_safe('opties_profielen')
 opties_advies = get_scouting_options_safe('opties_advies')
@@ -129,7 +134,7 @@ opties_shortlists = get_scouting_options_safe('shortlists')
 
 st.sidebar.header("Selecteer Wedstrijd")
 
-# 1. SEIZOEN
+# 1. Seizoen Selectie
 try:
     df_seasons = run_query("SELECT DISTINCT season FROM public.iterations ORDER BY season DESC")
     if not df_seasons.empty:
@@ -142,21 +147,21 @@ except Exception as e:
     st.error(f"DB Fout: {e}")
     st.stop()
 
-# 2. COMPETITIE (Alleen als seizoen gekozen is)
+# 2. Competitie Selectie
 if sel_season:
     df_comps = run_query('SELECT DISTINCT "competitionName" FROM public.iterations WHERE season = %s ORDER BY "competitionName"', params=(sel_season,))
     if not df_comps.empty:
         comps = df_comps['competitionName'].tolist()
         sel_comp = st.sidebar.selectbox("2. Competitie", comps)
     else:
-        st.warning("Geen competities in dit seizoen.")
+        st.warning("Geen competities gevonden.")
         st.stop()
 else:
     st.stop()
 
-# 3. WEDSTRIJD (Alleen als seizoen én competitie gekozen zijn)
+# 3. Wedstrijd Selectie
 if sel_season and sel_comp:
-    # Query met datum filter (reeds gespeeld of bezig)
+    # Filter op: Seizoen + Competitie + Datum (Alles <= NU)
     match_query = """
         SELECT m.id, m."scheduledDate", m."iterationId", h.name as home, a.name as away
         FROM public.matches m
@@ -169,13 +174,13 @@ if sel_season and sel_comp:
     df_matches = run_query(match_query, params=(sel_season, sel_comp))
     
     if df_matches.empty:
-        st.info("Geen gespeelde wedstrijden gevonden.")
+        st.info("Geen gespeelde of actieve wedstrijden gevonden.")
         st.stop()
 
     match_opts = {f"{r['home']} vs {r['away']} ({r['scheduledDate'].strftime('%d-%m')})": r for _, r in df_matches.iterrows()}
     sel_match_label = st.sidebar.selectbox("3. Wedstrijd", list(match_opts.keys()))
     
-    # Variabelen instellen voor de rest van het script
+    # Variabelen instellen
     sel_match_row = match_opts[sel_match_label]
     selected_match_id = str(sel_match_row['id'])
     selected_comp_id = str(sel_match_row['iterationId'])
@@ -186,6 +191,7 @@ else:
 
 st.sidebar.divider()
 st.sidebar.write(f"👤 **Scout:** {current_scout_name}")
+
 # -----------------------------------------------------------------------------
 # 3. SPELERS OPHALEN
 # -----------------------------------------------------------------------------
@@ -194,7 +200,7 @@ try:
     df_json = run_query(json_query, params=(selected_match_id,))
 except Exception as e: st.error(f"Fout JSON: {e}"); st.stop()
 
-if df_json.empty: st.warning("Geen detail data."); st.stop()
+if df_json.empty: st.warning("Geen detail data beschikbaar voor deze match."); st.stop()
 
 def parse_squad_json(json_data, side):
     players_list = []
@@ -214,13 +220,14 @@ home_players = parse_squad_json(df_json.iloc[0]['squadHome'], 'home')
 away_players = parse_squad_json(df_json.iloc[0]['squadAway'], 'away')
 all_players_data = home_players + away_players
 
-if not all_players_data: st.warning("Geen spelers."); st.stop()
+if not all_players_data: st.warning("Geen spelers in opstelling gevonden."); st.stop()
 
 df_p_raw = pd.DataFrame(all_players_data)
 player_ids = tuple(df_p_raw['player_id'].unique())
 
 if player_ids:
     name_query = f"SELECT id, commonname FROM public.players WHERE id IN {player_ids}"
+    # Tuple fix voor 1 element
     if len(player_ids) == 1: name_query = name_query.replace(f"IN {player_ids}", f"IN ('{player_ids[0]}')")
     
     df_names = run_query(name_query)
@@ -252,7 +259,7 @@ with col_list:
         pid = str(row['player_id'])
         pname = f"{int(row['shirt_number'])}. {row['commonname']}"
         
-        # Check draft
+        # Check draft status voor icoontje
         dkey = f"{selected_match_id}_{pid}_{current_scout_id}"
         has_draft = dkey in st.session_state.scout_drafts
         
@@ -278,6 +285,7 @@ with col_editor:
             
             if not existing.empty:
                 rec = existing.iloc[0]
+                # Gebruik correcte kolomnaam gouden_buzzer
                 gval = bool(rec['gouden_buzzer']) if 'gouden_buzzer' in rec else False
                 
                 st.session_state.scout_drafts[draft_key] = {
@@ -286,6 +294,7 @@ with col_editor:
                     "tekst": rec['rapport_tekst'] or "", "gouden_buzzer": gval, "shortlist": rec['shortlist_id']
                 }
             else:
+                # Initieer leeg draft
                 st.session_state.scout_drafts[draft_key] = {
                     "positie": None, "profiel": None, "advies": None,
                     "rating": 6, "tekst": "", "gouden_buzzer": False, "shortlist": None
@@ -294,9 +303,10 @@ with col_editor:
         draft = st.session_state.scout_drafts[draft_key]
 
         # --- FORMULIER MET DYNAMISCHE KEYS ---
-        # Door de active_pid in de key te steken, forceer je een refresh bij spelerwissel!
+        # Door active_pid in de key te steken, forceer je refresh bij spelerwissel!
         
         c1, c2 = st.columns(2)
+        
         def get_idx(val, opts): return opts.index(val) if val in opts else 0
 
         with c1:
@@ -304,8 +314,8 @@ with col_editor:
             pos_lbls = opties_posities['label'].tolist()
             curr_pos = draft['positie']
             idx_pos = pos_opts.index(curr_pos) if curr_pos in pos_opts else 0
-            new_pos = st.selectbox("Positie", pos_opts, index=idx_pos, format_func=lambda x: pos_lbls[pos_opts.index(x)] if x in pos_opts else x, key=f"inp_pos_{active_pid}")
             
+            new_pos = st.selectbox("Positie", pos_opts, index=idx_pos, format_func=lambda x: pos_lbls[pos_opts.index(x)] if x in pos_opts else x, key=f"inp_pos_{active_pid}")
             new_rating = st.slider("Beoordeling (1-10)", 1, 10, draft["rating"], key=f"inp_rate_{active_pid}")
 
         with c2:
@@ -313,18 +323,21 @@ with col_editor:
             adv_lbls = opties_advies['label'].tolist()
             curr_adv = draft['advies']
             idx_adv = adv_opts.index(curr_adv) if curr_adv in adv_opts else 0
+            
             new_adv = st.selectbox("Advies", adv_opts, index=idx_adv, format_func=lambda x: adv_lbls[adv_opts.index(x)] if x in adv_opts else x, key=f"inp_adv_{active_pid}")
 
             prof_opts = opties_profielen['value'].tolist()
             prof_lbls = opties_profielen['label'].tolist()
             curr_prof = draft['profiel']
             idx_prof = prof_opts.index(curr_prof) if curr_prof in prof_opts else 0
+            
             new_prof = st.selectbox("Profiel", prof_opts, index=idx_prof, format_func=lambda x: prof_lbls[prof_opts.index(x)] if x in prof_opts else x, key=f"inp_prof_{active_pid}")
 
         new_tekst = st.text_area("Rapportage", draft["tekst"], height=200, key=f"inp_txt_{active_pid}")
         
         ce1, ce2 = st.columns(2)
         with ce1: 
+            # Consistent gebruik van gouden_buzzer
             new_gouden = st.checkbox("🏆 Gouden Buzzer", draft["gouden_buzzer"], key=f"inp_gold_{active_pid}")
         with ce2:
             sl_opts = [None] + opties_shortlists['value'].tolist()
@@ -338,7 +351,7 @@ with col_editor:
             
             new_sl = st.selectbox("Shortlist", sl_opts, index=idx_sl, format_func=fmt_sl, key=f"inp_sl_{active_pid}")
 
-        # Update draft
+        # Update draft (belangrijk: gouden_buzzer gebruiken!)
         st.session_state.scout_drafts[draft_key] = {
             "positie": new_pos, "profiel": new_prof, "advies": new_adv,
             "rating": new_rating, "tekst": new_tekst, "gouden_buzzer": new_gouden, "shortlist": new_sl
