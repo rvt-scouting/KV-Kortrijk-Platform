@@ -113,11 +113,9 @@ else:
     pg = st.navigation(pages_dict)
     pg.run()
     
-    # --- E. SIDEBAR FOOTER ---
+# --- E. SIDEBAR FOOTER ---
     with st.sidebar:
         st.divider()
         st.write(f"👤 **{st.session_state.user_info['naam']}**")
-        # Debug info (verwijder dit later als alles werkt)
-        # st.caption(f"Niveau: {user_level}") 
         if st.button("Uitloggen", key="logout_btn"):
             logout()
