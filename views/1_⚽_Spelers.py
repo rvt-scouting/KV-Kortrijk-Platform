@@ -170,6 +170,7 @@ try:
         active_profiles = {k: v for k, v in profile_mapping.items() if v is not None and v > 0}
         df_chart = pd.DataFrame(list(active_profiles.items()), columns=['Profiel', 'Score'])
         
+        # Highlight voor numerieke scores
         def highlight_high_scores(val):
             return 'color: #2ecc71; font-weight: bold' if isinstance(val, (int, float)) and val > 66 else ''
 
@@ -223,6 +224,72 @@ try:
                 
                 if not df_k1.empty: st.caption("Aan de Bal"); st.dataframe(df_k1.style.applymap(highlight_high_scores, subset=['Score']), use_container_width=True, hide_index=True)
                 if not df_k2.empty: st.caption("Zonder Bal"); st.dataframe(df_k2.style.applymap(highlight_high_scores, subset=['Score']), use_container_width=True, hide_index=True)
+
+        # =========================================================================
+        # NIEUW: FYSIEKE DATA (SKILLCORNER)
+        # =========================================================================
+        st.markdown("---")
+        st.subheader("💪 Fysieke Data (SkillCorner)")
+        
+        # JOIN via idMappings_2_skill_corner_0
+        q_phys = """
+            SELECT 
+                f.total_matches,
+                f.psv99_score as "PSV 99",
+                f.timetosprint_score as "TTS",
+                f.sprint_distance_full_all_score as "Sprint Dis",
+                f.sprint_count_full_all_score as "Sprint Cnt",
+                f.total_distance_full_all_score as "Tot. Dis",
+                f.*
+            FROM analysis.player_physical_group_scores f
+            JOIN public.players p ON CAST(f.player_id AS TEXT) = CAST(p."idMappings_2_skill_corner_0" AS TEXT)
+            WHERE p.id = %s
+            LIMIT 1
+        """
+        try:
+            df_phys = run_query(q_phys, params=(str(final_player_id),))
+            
+            if not df_phys.empty:
+                # 1. Stylings functie voor A/B/C
+                def color_physical_score(val):
+                    val_str = str(val).strip().upper()
+                    if val_str == 'A':
+                        return 'color: #2ecc71; font-weight: bold' # Groen
+                    elif val_str == 'B':
+                        return 'color: #f1c40f; font-weight: bold' # Geel/Oranje
+                    elif val_str == 'C':
+                        return 'color: #e74c3c; font-weight: bold' # Rood
+                    return ''
+
+                # 2. Hoofdtabel tonen
+                main_cols = ["total_matches", "PSV 99", "TTS", "Sprint Dis", "Sprint Cnt", "Tot. Dis"]
+                df_phys_main = df_phys[main_cols].copy()
+                
+                st.dataframe(
+                    df_phys_main.style.applymap(color_physical_score),
+                    use_container_width=True,
+                    hide_index=True
+                )
+                
+                # 3. Uitklapbaar detail menu
+                with st.expander("📊 Toon ALLE fysieke scores"):
+                    # Zoek alle kolommen die eindigen op '_score'
+                    score_cols = [c for c in df_phys.columns if c.endswith('_score')]
+                    if score_cols:
+                        df_phys_all = df_phys[score_cols].copy()
+                        # Transpose voor betere leesbaarheid bij veel kolommen
+                        st.dataframe(
+                            df_phys_all.style.applymap(color_physical_score),
+                            use_container_width=True,
+                            hide_index=True
+                        )
+                    else:
+                        st.info("Geen detail scores gevonden.")
+            else:
+                st.info("Geen fysieke data gekoppeld voor deze speler.")
+                
+        except Exception as e:
+            st.error(f"Fout fysieke data: {e}")
 
         # INTERNE RAPPORTEN
         st.markdown("---")
