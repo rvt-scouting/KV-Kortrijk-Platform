@@ -126,10 +126,29 @@ try:
     sel_season = st.sidebar.selectbox("1. Seizoen", seasons)
 except: st.error("DB Fout"); st.stop()
 
-if sel_season:
-    df_comps = run_query('SELECT DISTINCT "competitionName" FROM public.iterations WHERE season = %s ORDER BY "competitionName"', params=(sel_season,))
-    comps = df_comps['competitionName'].tolist()
-    sel_comp = st.sidebar.selectbox("2. Competitie", comps)
+if sel_season and sel_comp:
+    # AANGEPAST: Extra filter 'AND m."scheduledDate" <= NOW()' toegevoegd
+    match_query = """
+        SELECT m.id, m."scheduledDate", m."iterationId", h.name as home, a.name as away
+        FROM public.matches m
+        JOIN public.squads h ON m."homeSquadId" = h.id
+        JOIN public.squads a ON m."awaySquadId" = a.id
+        WHERE m."iterationId" IN (SELECT id FROM public.iterations WHERE season = %s AND "competitionName" = %s)
+        AND m."scheduledDate" <= NOW() 
+        ORDER BY m."scheduledDate" DESC
+    """
+    df_matches = run_query(match_query, params=(sel_season, sel_comp))
+    
+    if df_matches.empty: st.info("Geen gespeelde wedstrijden gevonden."); st.stop()
+
+    match_opts = {f"{r['home']} vs {r['away']} ({r['scheduledDate'].strftime('%d-%m')})": r for _, r in df_matches.iterrows()}
+    sel_match_label = st.sidebar.selectbox("3. Wedstrijd", list(match_opts.keys()))
+    
+    sel_match_row = match_opts[sel_match_label]
+    selected_match_id = str(sel_match_row['id'])
+    selected_comp_id = str(sel_match_row['iterationId'])
+    home_team_name = sel_match_row['home']
+    away_team_name = sel_match_row['away']
 else: st.stop()
 
 selected_match_id = None
