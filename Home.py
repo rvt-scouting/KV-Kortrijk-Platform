@@ -2,141 +2,101 @@ import streamlit as st
 from utils import check_login
 
 # -----------------------------------------------------------------------------
-# 1. SETUP & SESSION STATE
+# 1. SETUP
 # -----------------------------------------------------------------------------
 st.set_page_config(
     page_title="KVK Platform", 
     page_icon="🔴", 
     layout="wide",
-    initial_sidebar_state="expanded" # Forceer menu open
+    initial_sidebar_state="expanded" 
 )
 
-# Initialiseer sessie variabelen
+# -----------------------------------------------------------------------------
+# 2. LOGIN LOGICA
+# -----------------------------------------------------------------------------
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 if "user_info" not in st.session_state:
     st.session_state.user_info = None
 
-# -----------------------------------------------------------------------------
-# 2. LOGIN SCHERM (Alleen zichtbaar als niet ingelogd)
-# -----------------------------------------------------------------------------
 def login_screen():
-    st.title("🔴⚪ KVK Data Platform - Login")
-    
-    c1, c2, c3 = st.columns([1, 2, 1])
-    with c2:
-        with st.form("login_form"):
-            email = st.text_input("E-mailadres")
-            password = st.text_input("Wachtwoord", type="password")
-            submit = st.form_submit_button("Inloggen")
-            
-            if submit:
-                user = check_login(email, password)
-                if user:
-                    st.success(f"Welkom terug, {user['naam']}!")
-                    st.session_state.logged_in = True
-                    st.session_state.user_info = user
-                    st.rerun()
-                else:
-                    st.error("Ongeldige inloggegevens of account niet actief.")
+    st.title("🔴⚪ KVK Login")
+    with st.form("login"):
+        email = st.text_input("Email")
+        pwd = st.text_input("Wachtwoord", type="password")
+        if st.form_submit_button("Inloggen"):
+            user = check_login(email, pwd)
+            if user:
+                st.session_state.logged_in = True
+                st.session_state.user_info = user
+                st.rerun()
+            else:
+                st.error("Fout")
 
-# -----------------------------------------------------------------------------
-# 3. UITLOGGEN & WELKOM
-# -----------------------------------------------------------------------------
 def logout():
     st.session_state.logged_in = False
     st.session_state.user_info = None
     st.rerun()
 
-def welcome_page():
-    st.title(f"Welkom, {st.session_state.user_info['naam']}")
-    # Let op: we gebruiken hier 'rol', zoals het in je nieuwe tabel heet
-    rol = st.session_state.user_info.get('rol', 'Onbekend')
-    st.write(f"**Functie:** {rol}")
-    
-    st.info("👈 Selecteer een module in het menu links om te beginnen.")
-    
-    st.markdown("---")
-    st.caption("© 2025 KV Kortrijk Scouting Dept.")
+# -----------------------------------------------------------------------------
+# 3. PAGINA DEFINITIES
+# -----------------------------------------------------------------------------
+def welcome():
+    st.title(f"Welkom {st.session_state.user_info.get('naam')}")
+    st.write("Gebruik het menu links.")
+
+def test_page_func():
+    st.title("🛠️ Test Pagina")
+    st.write("Als je dit ziet, werkt het menu!")
+    st.write(f"Jouw ruwe data: {st.session_state.user_info}")
+
+# Paginabeheer
+pg_home = st.Page(welcome, title="Home", icon="🏠")
+pg_test = st.Page(test_page_func, title="Systeem Test", icon="🛠️")
+
+# Zorg dat deze bestanden echt bestaan in 'views/'!
+pg_scout = st.Page("views/scouting.py", title="Scouting", icon="📝") 
+pg_disc = st.Page("views/5_🔎_Discover.py", title="Discover", icon="🔎")
+pg_offer = st.Page("views/6_📥_Aangeboden.py", title="Aangeboden", icon="📥")
+pg_match = st.Page("views/3_📊_Wedstrijden.py", title="Wedstrijden", icon="📊")
+pg_coach = st.Page("views/2_👔_Coaches.py", title="Coaches", icon="👔")
+pg_player = st.Page("views/1_⚽_Spelers_en_Teams.py", title="Spelers", icon="⚽")
 
 # -----------------------------------------------------------------------------
-# 4. DE NAVIGATIE ROUTER
+# 4. NAVIGATIE BOUWER
 # -----------------------------------------------------------------------------
 if not st.session_state.logged_in:
     login_screen()
 else:
-    # --- A. DEFINIEER PAGINA'S (Check of deze bestandsnamen EXACT kloppen in GitHub!) ---
-    pg_welcome = st.Page(welcome_page, title="Home", icon="🏠")
-    
-# Let op: check of je bestandsnamen nog kloppen!
-    # Als je bij het hernoemen de "1_⚽_" hebt weggehaald, pas dat hier dan ook aan.
-    
-    pg_spelers = st.Page("views/1_⚽_Spelers_en_Teams.py", title="Spelers & Teams", icon="⚽")
-    pg_coaches = st.Page("views/2_👔_Coaches.py", title="Coaches", icon="👔")
-    pg_wedstrijden = st.Page("views/3_📊_Wedstrijden.py", title="Wedstrijden", icon="📊")
-    pg_scouting = st.Page("views/4_📝_Scouting.py", title="Scouting", icon="📝") 
-    pg_discover = st.Page("views/5_🔎_Discover.py", title="Discover", icon="🔎")
-    pg_aangeboden = st.Page("views/6_📥_Aangeboden.py", title="Aangeboden", icon="📥")
-
-    # --- B. BEPAAL RECHTEN ---
-    raw_level = st.session_state.user_info.get('toegangsniveau', 0)
-    
-    # Veiligheidsconversie: Zorg dat het zeker een getal is (int)
+    # Haal niveau op (veilig)
     try:
-        user_level = int(raw_level)
+        lvl = int(st.session_state.user_info.get('toegangsniveau', 0))
     except:
-        user_level = 0
+        lvl = 0
 
-    # --- C. BOUW HET MENU (SECTIES) ---
-    pages_dict = {}
+    # Bouw de dictionary
+    pages = {}
+    
+    # GROEP 1: ALGEMEEN (Altijd minimaal 2 pagina's om menu te forceren!)
+    pages["Algemeen"] = [pg_home, pg_test]
 
-    # 1. Altijd zichtbaar
-    pages_dict["Algemeen"] = [pg_welcome]
-
-    # 2. Modules verzamelen
+    # GROEP 2: MODULES
     modules = []
+    if lvl >= 1: modules.extend([pg_scout, pg_offer, pg_disc])
+    if lvl >= 2: modules.extend([pg_match, pg_coach])
+    if lvl >= 3: modules.extend([pg_player])
 
-    # Niveau 1: Basis (Scouting, Aangeboden, Discover)
-    if user_level >= 1:
-        modules.extend([pg_scouting, pg_aangeboden, pg_discover])
-    
-    # Niveau 2: Analist (+ Wedstrijden, Coaches)
-    if user_level >= 2:
-        modules.extend([pg_wedstrijden, pg_coaches])
-
-    # Niveau 3: Directie (+ Spelers Data)
-    if user_level >= 3:
-        modules.extend([pg_spelers])
-
-    # Voeg toe aan menu als er modules zijn
     if modules:
-        pages_dict["Scouting Platform"] = modules
+        pages["Scouting App"] = modules
 
-    # NOODOPLOSSING OM TE TESTEN:
-    # Voeg een dummy pagina toe aan 'Algemeen' zodat er altijd minstens 2 pagina's zijn.
-    # Hierdoor MOET het menu wel verschijnen.
-    def test_page():
-        st.write("Dit is een test.")
+    # START DE NAVIGATIE
+    with st.sidebar:
+        st.title("KV Kortrijk") # Dit MOET zichtbaar zijn
         
-    pg_test = st.Page(test_page, title="Test Pagina", icon="🔧")
-    pages_dict["Algemeen"].append(pg_test)
-    # --- D. START NAVIGATIE ---
-    pg = st.navigation(pages_dict, position="sidebar")
+    pg = st.navigation(pages)
     pg.run()
-    
-# --- E. SIDEBAR FOOTER (DEBUG VERSIE) ---
+
     with st.sidebar:
         st.divider()
-        st.write(f"👤 **{st.session_state.user_info['naam']}**")
-        
-        # --- DEBUG INFO START ---
-        raw = st.session_state.user_info.get('toegangsniveau', 'Niet gevonden')
-        st.code(f"DB Niveau: {raw}\nType: {type(raw)}")
-        st.code(f"Modules: {len(modules)}")
-        if st.button("🗑️ Cache Legen"):
-            st.cache_data.clear()
-            st.rerun()
-        # --- DEBUG INFO EINDE ---
-
-        if st.button("Uitloggen", key="logout_btn"):
+        if st.button("Uitloggen"):
             logout()
