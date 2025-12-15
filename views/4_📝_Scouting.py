@@ -9,30 +9,30 @@ st.set_page_config(page_title="Live Scouting", page_icon="📝", layout="wide")
 # 1. HULPFUNCTIES
 # -----------------------------------------------------------------------------
 
-# We gebruiken een nieuwe naam om cache issues te voorkomen
 @st.cache_data
 def get_scouting_options_safe(table_name):
     """ 
     Haalt opties op. 
     Garandeert ALTIJD een dataframe met columns ['value', 'label'].
+    FIX: Werkt nu ook voor tabellen met maar 1 kolom.
     """
-    # 1. Definieer Noodlijsten (Hardcoded)
+    # 1. Definieer Noodlijsten (Fallback)
     fallback_data = pd.DataFrame(columns=['value', 'label'])
     
     if "posities" in table_name:
         fallback_data = pd.DataFrame({
-            'value': ["Doelman", "Verdediger", "Middenvelder", "Aanvaller", "Wingback", "Spits"],
-            'label': ["Doelman", "Verdediger", "Middenvelder", "Aanvaller", "Wingback", "Spits"]
+            'value': ["Doelman", "Verdediger", "Middenvelder", "Aanvaller"],
+            'label': ["Doelman", "Verdediger", "Middenvelder", "Aanvaller"]
         })
     elif "advies" in table_name:
         fallback_data = pd.DataFrame({
-            'value': ["A", "B", "C", "D"],
-            'label': ["A - Directe Versterking", "B - Interessant / Volgen", "C - Twijfelgeval", "D - Niet goed genoeg"]
+            'value': ["A", "B", "C"],
+            'label': ["A", "B", "C"]
         })
     elif "profielen" in table_name:
         fallback_data = pd.DataFrame({
-            'value': ["Leider", "Talent", "Ervaren", "Fysiek", "Snelheid", "Technisch"],
-            'label': ["Leider", "Talent", "Ervaren", "Fysiek", "Snelheid", "Technisch"]
+            'value': ["P1", "P2"],
+            'label': ["P1", "P2"]
         })
     elif "shortlists" in table_name:
         fallback_data = pd.DataFrame({
@@ -49,16 +49,25 @@ def get_scouting_options_safe(table_name):
         
         cols = df.columns.tolist()
         
+        # --- SCENARIO 1: TABEL HEEFT MAAR 1 KOLOM (bv. alleen 'code') ---
+        if len(cols) == 1:
+            col_name = cols[0]
+            # We gebruiken die ene kolom als zowel de waarde als het label
+            df['value'] = df[col_name]
+            df['label'] = df[col_name]
+            return df[['value', 'label']]
+
+        # --- SCENARIO 2: TABEL HEEFT MEERDERE KOLOMMEN (ID + Naam) ---
         # Zoek label kolom
         candidates = ['naam', 'label', 'status', 'omschrijving', 'code', 'type']
-        label_col = next((c for c in cols if c in candidates), cols[1] if len(cols) > 1 else cols[0])
+        label_col = next((c for c in cols if c in candidates), cols[1])
         value_col = 'id' if 'id' in cols else cols[0]
         
         # Rename en return
         result = df[[value_col, label_col]].rename(columns={value_col: 'value', label_col: 'label'})
         return result
 
-    except Exception:
+    except Exception as e:
         # 3. Als DB faalt, geef noodlijst terug
         return fallback_data
 
@@ -127,6 +136,7 @@ current_scout_name = st.session_state.user_info.get('naam', 'Onbekend')
 st.title("📝 Live Match Scouting")
 
 # Haal opties op (Veilige functie)
+# Zorg dat je 'Cache Clear' doet als het nog steeds fout gaat!
 opties_posities = get_scouting_options_safe('opties_posities')
 opties_profielen = get_scouting_options_safe('opties_profielen')
 opties_advies = get_scouting_options_safe('opties_advies')
@@ -257,9 +267,7 @@ with col_editor:
         
         # OPHALEN RAPPORT UIT DB
         if draft_key not in st.session_state.scout_drafts:
-            # We checken de DB
             db_q = "SELECT * FROM scouting.rapporten WHERE scout_id = %s AND speler_id = %s AND wedstrijd_id = %s"
-            # Let op: active_pid is een string, dat is goed voor de query
             existing = run_query(db_q, params=(current_scout_id, active_pid, selected_match_id))
             
             if not existing.empty:
@@ -281,47 +289,56 @@ with col_editor:
         def get_idx(val, opts): return opts.index(val) if val in opts else 0
 
         with c1:
-            # Posities
+            # POSITIES
             pos_opts = opties_posities['value'].tolist()
             pos_lbls = opties_posities['label'].tolist()
-            # Veilig de index bepalen, zelfs als 'positie' niet in de lijst staat
+            # Veilig de index bepalen (als lijst leeg is, default naar None)
             curr_pos = draft['positie']
-            idx_pos = pos_opts.index(curr_pos) if curr_pos in pos_opts else 0
-            new_pos = st.selectbox("Positie Gespeeld", pos_opts, index=idx_pos, format_func=lambda x: pos_lbls[pos_opts.index(x)] if x in pos_opts else x, key="inp_pos")
+            if not pos_opts: 
+                new_pos = None
+                st.warning("Geen posities gevonden in DB.")
+            else:
+                idx_pos = pos_opts.index(curr_pos) if curr_pos in pos_opts else 0
+                new_pos = st.selectbox("Positie Gespeeld", pos_opts, index=idx_pos, format_func=lambda x: pos_lbls[pos_opts.index(x)], key="inp_pos")
             
             new_rating = st.slider("Beoordeling (1-10)", 1, 10, draft["rating"], key="inp_rate")
 
         with c2:
-            # Advies
+            # ADVIES
             adv_opts = opties_advies['value'].tolist()
             adv_lbls = opties_advies['label'].tolist()
             curr_adv = draft['advies']
-            idx_adv = adv_opts.index(curr_adv) if curr_adv in adv_opts else 0
-            new_adv = st.selectbox("Advies", adv_opts, index=idx_adv, format_func=lambda x: adv_lbls[adv_opts.index(x)] if x in adv_opts else x, key="inp_adv")
+            if not adv_opts:
+                new_adv = None
+            else:
+                idx_adv = adv_opts.index(curr_adv) if curr_adv in adv_opts else 0
+                new_adv = st.selectbox("Advies", adv_opts, index=idx_adv, format_func=lambda x: adv_lbls[adv_opts.index(x)], key="inp_adv")
 
-            # Profiel
+            # PROFIEL
             prof_opts = opties_profielen['value'].tolist()
             prof_lbls = opties_profielen['label'].tolist()
             curr_prof = draft['profiel']
-            idx_prof = prof_opts.index(curr_prof) if curr_prof in prof_opts else 0
-            new_prof = st.selectbox("Profiel Type", prof_opts, index=idx_prof, format_func=lambda x: prof_lbls[prof_opts.index(x)] if x in prof_opts else x, key="inp_prof")
+            if not prof_opts:
+                new_prof = None
+            else:
+                idx_prof = prof_opts.index(curr_prof) if curr_prof in prof_opts else 0
+                new_prof = st.selectbox("Profiel Type", prof_opts, index=idx_prof, format_func=lambda x: prof_lbls[prof_opts.index(x)], key="inp_prof")
 
         new_tekst = st.text_area("Rapportage", draft["tekst"], height=200, key="inp_txt")
         
         ce1, ce2 = st.columns(2)
         with ce1: new_gouden = st.checkbox("🏆 Gouden Busser", draft["gouden"], key="inp_gold")
         with ce2:
-            # Shortlist
+            # SHORTLIST
             sl_opts = [None] + opties_shortlists['value'].tolist()
             sl_lbls = ["Geen"] + opties_shortlists['label'].tolist()
-            
-            def fmt_sl(x):
-                if x is None: return "Geen"
-                try: return sl_lbls[sl_opts.index(x)]
-                except: return str(x)
-            
             curr_sl = draft['shortlist']
             idx_sl = sl_opts.index(curr_sl) if curr_sl in sl_opts else 0
+            
+            def fmt_sl(x):
+                try: return sl_lbls[sl_opts.index(x)]
+                except: return "Geen"
+            
             new_sl = st.selectbox("Zet op Shortlist", sl_opts, index=idx_sl, format_func=fmt_sl, key="inp_sl")
 
         st.session_state.scout_drafts[draft_key] = {
