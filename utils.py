@@ -2,7 +2,9 @@ import streamlit as st
 import psycopg2
 import pandas as pd
 
-# 1. DATABASE CONNECTIE
+# -----------------------------------------------------------------------------
+# 1. DATABASE CONNECTIE & QUERY FUNCTIE
+# -----------------------------------------------------------------------------
 def init_connection():
     return psycopg2.connect(
         host=st.secrets["postgres"]["host"],
@@ -23,7 +25,62 @@ def run_query(query, params=None):
     finally:
         conn.close()
 
-# 2. CONFIGURATIES
+# -----------------------------------------------------------------------------
+# 2. ALGEMENE SIDEBAR (DE FUNCTIE DIE MISTE!)
+# -----------------------------------------------------------------------------
+def show_sidebar_filters():
+    """
+    Deze functie toont de dropdowns voor Seizoen en Competitie in de sidebar
+    en geeft het geselecteerde Seizoen en Iteration ID terug.
+    """
+    st.sidebar.header("1. Selecteer Data")
+    
+    # 1. Seizoen ophalen
+    season_query = "SELECT DISTINCT season FROM public.iterations ORDER BY season DESC;"
+    try:
+        df_seasons = run_query(season_query)
+        if df_seasons.empty:
+            st.error("Geen seizoenen gevonden in DB.")
+            return None, None
+            
+        seasons_list = df_seasons['season'].tolist()
+        
+        # Zorg dat er een standaardwaarde is in de sessie status
+        if "sb_season" not in st.session_state:
+            st.session_state.sb_season = seasons_list[0]
+            
+        selected_season = st.sidebar.selectbox("Seizoen:", seasons_list, key="sb_season")
+    except Exception as e:
+        st.error("Kon seizoenen niet laden.")
+        return None, None
+
+    # 2. Competitie ophalen
+    selected_competition = None
+    if selected_season:
+        comp_query = 'SELECT DISTINCT "competitionName" FROM public.iterations WHERE season = %s ORDER BY "competitionName";'
+        df_comps = run_query(comp_query, params=(selected_season,))
+        comps_list = df_comps['competitionName'].tolist()
+        
+        if "sb_competition" not in st.session_state and comps_list:
+             st.session_state.sb_competition = comps_list[0]
+             
+        selected_competition = st.sidebar.selectbox("Competitie:", comps_list, key="sb_competition")
+
+    # 3. Iteration ID ophalen (nodig voor alle queries)
+    iteration_id = None
+    if selected_season and selected_competition:
+        id_query = 'SELECT id FROM public.iterations WHERE season = %s AND "competitionName" = %s LIMIT 1;'
+        df_id = run_query(id_query, params=(selected_season, selected_competition))
+        if not df_id.empty:
+            iteration_id = str(df_id.iloc[0]['id'])
+        else:
+            st.warning("Geen ID gevonden voor deze combinatie.")
+            
+    return selected_season, iteration_id
+
+# -----------------------------------------------------------------------------
+# 3. CONFIGURATIES & MAPPINGS
+# -----------------------------------------------------------------------------
 POSITION_METRICS = {
     "central_defender": {"aan_bal": [66, 58, 64, 10, 163], "zonder_bal": [103, 93, 32, 94, 17, 65, 92]},
     "wingback": {"aan_bal": [61, 66, 58, 54, 53, 52, 10, 9, 14], "zonder_bal": [68, 69, 17, 70]},
