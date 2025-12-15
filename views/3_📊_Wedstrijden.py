@@ -36,13 +36,16 @@ try:
     if "sb_season" in st.session_state and st.session_state.sb_season in seasons:
         idx_s = seasons.index(st.session_state.sb_season)
     sel_season = st.sidebar.selectbox("Seizoen", seasons, index=idx_s, key="sb_season")
-except: st.error("Geen seizoenen gevonden."); st.stop()
+except:
+    st.error("Geen seizoenen gevonden.")
+    st.stop()
 
 if sel_season:
     df_comps = run_query('SELECT DISTINCT "competitionName" FROM public.iterations WHERE season = %s', (sel_season,))
     comps = df_comps['competitionName'].tolist()
     sel_comp = st.sidebar.selectbox("Competitie", comps)
-else: st.stop()
+else:
+    st.stop()
 
 if sel_season and sel_comp:
     q_matches = """
@@ -56,13 +59,16 @@ if sel_season and sel_comp:
         ORDER BY m."scheduledDate" DESC
     """
     df_matches = run_query(q_matches, (sel_season, sel_comp))
-    if df_matches.empty: st.warning("Geen wedstrijden."); st.stop()
+    if df_matches.empty:
+        st.warning("Geen wedstrijden.")
+        st.stop()
         
     match_opts = {f"{r['home']} - {r['away']} ({r['scheduledDate'].strftime('%d-%m')})": r['id'] for _, r in df_matches.iterrows()}
     sel_match_label = st.sidebar.selectbox("Wedstrijd", list(match_opts.keys()))
     sel_match_id = str(match_opts[sel_match_label])
     match_row = df_matches[df_matches['id'] == sel_match_id].iloc[0]
-else: st.stop()
+else:
+    st.stop()
 
 st.title(f"🏟️ {match_row['home']} vs {match_row['away']}")
 st.caption(f"Datum: {match_row['scheduledDate'].strftime('%d-%m-%Y %H:%M')}")
@@ -79,8 +85,7 @@ def get_match_data_optimized(match_id):
             (e.player ->> 'id') as player_id_raw,
             (e."gameTime" ->> 'gameTime') as "TijdString",
             
-            -- Extra Kolommen voor Filtering
-            e."distanceToOpponent",  -- Text in DB, we casten in Python
+            e."distanceToOpponent",
             e."phase",
             e."pressure",
             
@@ -100,17 +105,16 @@ def get_match_data_optimized(match_id):
     
     df_ev['Minuut'] = df_ev['TijdString'].apply(parse_gametime_to_min)
     
-    # Casting van extra kolommen
-    df_ev['distanceToOpponent'] = pd.to_numeric(df_ev['distanceToOpponent'], errors='coerce')
-    df_ev['pressure'] = pd.to_numeric(df_ev['pressure'], errors='coerce')
-
     # Teams Map
     squad_ids = df_ev['squadId'].dropna().unique().tolist()
     squad_map = {}
     if squad_ids:
         s_ids_formatted = ", ".join(f"'{x}'" for x in squad_ids)
-        df_sq = run_query(f"SELECT id, name FROM public.squads WHERE id IN ({s_ids_formatted})")
-        if not df_sq.empty: squad_map = dict(zip(df_sq['id'].astype(str), df_sq['name']))
+        # Check if list is not empty before query
+        if s_ids_formatted:
+            df_sq = run_query(f"SELECT id, name FROM public.squads WHERE id IN ({s_ids_formatted})")
+            if not df_sq.empty:
+                squad_map = dict(zip(df_sq['id'].astype(str), df_sq['name']))
     df_ev['Team'] = df_ev['squadId'].astype(str).map(squad_map).fillna('Onbekend')
 
     # Spelers Map
@@ -118,8 +122,10 @@ def get_match_data_optimized(match_id):
     player_map = {}
     if player_ids:
         p_ids_formatted = ", ".join(f"'{x}'" for x in player_ids)
-        df_pl = run_query(f"SELECT id, commonname FROM public.players WHERE id IN ({p_ids_formatted})")
-        if not df_pl.empty: player_map = dict(zip(df_pl['id'].astype(str), df_pl['commonname']))
+        if p_ids_formatted:
+            df_pl = run_query(f"SELECT id, commonname FROM public.players WHERE id IN ({p_ids_formatted})")
+            if not df_pl.empty:
+                player_map = dict(zip(df_pl['id'].astype(str), df_pl['commonname']))
     df_ev['Speler'] = df_ev['player_id_raw'].astype(str).map(player_map).fillna('Onbekend')
 
     return df_ev
@@ -127,7 +133,9 @@ def get_match_data_optimized(match_id):
 with st.spinner("Bezig met analyseren..."):
     df_events = get_match_data_optimized(sel_match_id)
 
-if df_events.empty: st.warning("Geen data."); st.stop()
+if df_events.empty:
+    st.warning("Geen data.")
+    st.stop()
 
 # -----------------------------------------------------------------------------
 # 3. VERWERKING & LOGICA
@@ -159,7 +167,7 @@ df_events['xT_Generated_Player'] = df_events.apply(calc_player_xt, axis=1)
 
 # KLEUREN
 team_colors = {match_row['home']: '#e74c3c', match_row['away']: '#3498db', 'Onbekend': '#95a5a6'} 
-result_colors = {'SUCCESS': '#2ecc71', 'FAIL': '#e74c3c', 'OFFSIDE': '#95a5a6', 'NONE': '#bdc3c7', 'nan': '#bdc3c7'}
+result_colors = {'SUCCESS': '#2ecc71', 'FAIL': '#e74c3c', 'OFFSIDE': '#95a5a6', 'NONE': '#bdc3c7', 'nan': '#bdc3c7', '': '#bdc3c7'}
 
 # -----------------------------------------------------------------------------
 # 4. DASHBOARD
@@ -196,7 +204,8 @@ with tab1:
             fig_tl.update_traces(marker=dict(size=14, line=dict(width=1, color='DarkSlateGrey')))
             fig_tl.update_layout(height=350, showlegend=True)
             st.plotly_chart(fig_tl, use_container_width=True)
-        else: st.info("Geen hoogtepunten.")
+        else:
+            st.info("Geen hoogtepunten.")
 
     with col_st:
         st.subheader("Team Stats")
@@ -248,25 +257,32 @@ with tab2:
     c1, c2, c3 = st.columns(3)
     teams = df_events['Team'].unique(); sel_teams = c1.multiselect("Teams", teams, default=teams)
     acts = df_events['action_clean'].unique(); sel_acts = c2.multiselect("Acties", acts, default=[x for x in ['SHOT','GOAL'] if x in acts])
-    plys = df_events['Speler'].unique(); sel_plys = c3.multiselect("Speler", plys)
+    plys = df_events['Speler'].unique(); sel_plys = c3.multiselect("Speler (Map filter)", plys)
     
-    # EXTRA FILTERS (Kolom 2)
+    # EXTRA FILTERS
     st.markdown("### Extra Filters & Opties")
     f_c1, f_c2, f_c3 = st.columns(3)
     
-    # Distance Filter
-    min_dist, max_dist = float(df_events['distanceToOpponent'].min()), float(df_events['distanceToOpponent'].max())
-    if pd.isna(min_dist): min_dist, max_dist = 0.0, 50.0
-    sel_dist = f_c1.slider("Afstand tot Opponent (m)", min_dist, max_dist, (min_dist, max_dist))
+    # Dropdown logica (veilig sorteren)
+    try:
+        dist_vals = df_events['distanceToOpponent'].dropna().unique()
+        # Sorteer numeriek als mogelijk
+        dist_opts = sorted(dist_vals, key=lambda x: float(x))
+    except:
+        dist_opts = sorted(df_events['distanceToOpponent'].dropna().astype(str).unique())
     
-    # Pressure Filter
-    min_pres, max_pres = float(df_events['pressure'].min()), float(df_events['pressure'].max())
-    if pd.isna(min_pres): min_pres, max_pres = 0.0, 100.0
-    sel_pres = f_c2.slider("Pressure Intensity", min_pres, max_pres, (min_pres, max_pres))
+    sel_dist = f_c1.multiselect("Afstand tot Opponent", dist_opts)
     
-    # Phase Filter
-    phases = df_events['phase'].dropna().unique().tolist()
-    sel_phase = f_c3.multiselect("Spelfase", phases, default=phases)
+    try:
+        pres_vals = df_events['pressure'].dropna().unique()
+        pres_opts = sorted(pres_vals, key=lambda x: float(x))
+    except:
+        pres_opts = sorted(df_events['pressure'].dropna().astype(str).unique())
+    
+    sel_pres = f_c2.multiselect("Pressure", pres_opts)
+    
+    phases = sorted(df_events['phase'].dropna().astype(str).unique().tolist())
+    sel_phase = f_c3.multiselect("Spelfase", phases)
     
     # VISUALISATIE OPTIES
     v_c1, v_c2 = st.columns(2)
@@ -276,17 +292,18 @@ with tab2:
     # FILTER DATA
     df_m = df_events[
         (df_events['Team'].isin(sel_teams)) & 
-        (df_events['action_clean'].isin(sel_acts)) &
-        (df_events['distanceToOpponent'].between(sel_dist[0], sel_dist[1], inclusive='both') | df_events['distanceToOpponent'].isna()) &
-        (df_events['pressure'].between(sel_pres[0], sel_pres[1], inclusive='both') | df_events['pressure'].isna())
-    ]
+        (df_events['action_clean'].isin(sel_acts))
+    ].copy() # Gebruik copy om warnings te voorkomen
+
+    if sel_dist: df_m = df_m[df_m['distanceToOpponent'].isin(sel_dist)]
+    if sel_pres: df_m = df_m[df_m['pressure'].isin(sel_pres)]
     if sel_phase: df_m = df_m[df_m['phase'].isin(sel_phase)]
     if sel_plys: df_m = df_m[df_m['Speler'].isin(sel_plys)]
     
     # 1. PITCH MAP
     if not df_m.empty:
         fig = go.Figure()
-        # VELD (-52.5 tot 52.5)
+        # VELD CONFIGURATIE -52.5 tot 52.5
         fig.add_shape(type="rect", x0=-52.5, y0=-34, x1=52.5, y1=34, line=dict(color="white"), fillcolor="#4CAF50", layer="below")
         fig.add_shape(type="line", x0=0, y0=-34, x1=0, y1=34, line=dict(color="white"))
         fig.add_shape(type="circle", x0=-9.15, y0=-9.15, x1=9.15, y1=9.15, line=dict(color="white"))
@@ -295,17 +312,21 @@ with tab2:
         fig.add_shape(type="rect", x0=36, y0=-20.16, x1=52.5, y1=20.16, line=dict(color="white"))
         fig.add_shape(type="rect", x0=46.5, y0=-9.16, x1=52.5, y1=9.16, line=dict(color="white"))
 
-        # Plot points
-        for key in (sel_teams if color_mode == "Team" else ['SUCCESS', 'FAIL', 'OFFSIDE', 'NONE']):
+        # Bepaal groepen (Team of Resultaat)
+        if color_mode == "Team":
+            groups = sel_teams
+        else:
+            # Maak result_plot kolom veilig aan op de kopie
+            df_m['result_plot'] = df_m['result_clean'].replace({'': 'NONE', 'nan': 'NONE'}).fillna('NONE')
+            groups = df_m['result_plot'].unique()
+
+        for key in groups:
             if color_mode == "Team":
                 d = df_m[df_m['Team'] == key]
                 color = team_colors.get(key, '#95a5a6')
                 name_lbl = key
             else:
-                # Filter op Result
-                if key == 'NONE': d = df_m[df_m['result_clean'].isin(['NONE', 'nan', ''])]
-                else: d = df_m[df_m['result_clean'] == key]
-                
+                d = df_m[df_m['result_plot'] == key]
                 color = result_colors.get(key, '#bdc3c7')
                 name_lbl = key
 
@@ -321,10 +342,8 @@ with tab2:
                 customdata=d[['TijdString', 'distanceToOpponent', 'pressure']]
             ))
             
-            # LIJNEN (Optioneel)
+            # LIJNEN
             if show_lines and len(d) < 2000:
-                # Lijnen toevoegen is traag met loops in plotly, 
-                # we doen het hier per trace met None gaps voor snelheid
                 x_lines = []
                 y_lines = []
                 for _, row in d.iterrows():
@@ -350,15 +369,12 @@ with tab2:
             margin=dict(l=0, r=0, t=20, b=0)
         )
         st.plotly_chart(fig, use_container_width=True)
-    else: st.info("Geen events met deze filters.")
+    else:
+        st.info("Geen events met deze filters.")
 
     # 2. RADAR CHART
     st.divider()
     st.subheader("🕸️ Spider Diagram: Team Vergelijking")
-    
-    # Radar negeert spelersfilter en extra filters voor totaalbeeld? 
-    # Nee, we gebruiken gefilterde set maar misschien zonder speler?
-    # Laten we de gefilterde set gebruiken om 'in te zoomen' op de situatie.
     
     if not df_m.empty and len(sel_acts) > 0:
         radar_agg = df_m.groupby(['Team', 'action_clean']).size().reset_index(name='Count')
@@ -370,14 +386,16 @@ with tab2:
                 row = radar_agg[(radar_agg['Team'] == t) & (radar_agg['action_clean'] == a)]
                 vals.append(row['Count'].values[0] if not row.empty else 0)
             
-            vals_plot = vals + [vals[0]]
-            thetas_plot = sel_acts + [sel_acts[0]]
-            
-            fig_rad.add_trace(go.Scatterpolar(
-                r=vals_plot, theta=thetas_plot,
-                fill='toself', name=t,
-                line_color=team_colors.get(t, '#95a5a6')
-            ))
+            # Sluit de cirkel
+            if vals:
+                vals_plot = vals + [vals[0]]
+                thetas_plot = sel_acts + [sel_acts[0]]
+                
+                fig_rad.add_trace(go.Scatterpolar(
+                    r=vals_plot, theta=thetas_plot,
+                    fill='toself', name=t,
+                    line_color=team_colors.get(t, '#95a5a6')
+                ))
         
         fig_rad.update_layout(polar=dict(radialaxis=dict(visible=True)), showlegend=True, height=500)
         st.plotly_chart(fig_rad, use_container_width=True)
@@ -405,4 +423,6 @@ with tab3:
 # -----------------------------------------------------------------------------
 with tab4:
     cols = ['Volgorde', 'Minuut', 'Team', 'Speler', 'action', 'result', 'distanceToOpponent', 'pressure', 'phase']
-    st.dataframe(df_events[cols], use_container_width=True)
+    # Filter only existing columns
+    existing_cols = [c for c in cols if c in df_events.columns]
+    st.dataframe(df_events[existing_cols], use_container_width=True)
