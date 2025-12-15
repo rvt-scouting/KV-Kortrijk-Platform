@@ -40,29 +40,24 @@ def get_scouting_options_safe(table_name):
         return fallback_data
 
 def save_report_to_db(data):
-    """ 
-    Slaat rapport op (Upsert). 
-    Handelt nu zowel Database IDs als Manuele Namen (Custom) af.
-    """
+    """ Slaat rapport op (Upsert). Handelt Database IDs en Custom namen af. """
     conn = None
     try:
         conn = init_connection()
         cur = conn.cursor()
         
-        # 1. Data voorbereiden (None als het leeg is)
         scout_id = str(data['scout_id'])
         
-        # IDs (kunnen None zijn in manuele modus)
+        # IDs (kunnen None zijn)
         speler_id = str(data['speler_id']) if data['speler_id'] else None
         match_id = str(data['wedstrijd_id']) if data['wedstrijd_id'] else None
         comp_id = str(data['competitie_id']) if data['competitie_id'] else None
         
-        # Custom namen (kunnen None zijn in database modus)
+        # Custom namen
         custom_p = data.get('custom_speler_naam')
         custom_m = data.get('custom_wedstrijd_naam')
 
-        # 2. Bepaal de CHECK query (bestaat dit rapport al?)
-        # De WHERE clause verandert afhankelijk van of we IDs of Namen hebben
+        # Check Query opbouwen
         where_clauses = ["scout_id = %s"]
         params = [scout_id]
 
@@ -72,7 +67,6 @@ def save_report_to_db(data):
         else:
             where_clauses.append("custom_speler_naam = %s")
             params.append(custom_p)
-            # Zorg dat we niet per ongeluk DB spelers overschrijven, dus check dat speler_id NULL is
             where_clauses.append("speler_id IS NULL")
 
         if match_id:
@@ -87,9 +81,7 @@ def save_report_to_db(data):
         cur.execute(check_q, tuple(params))
         existing = cur.fetchone()
         
-        # 3. UPSERT Logica
         if existing:
-            # UPDATE
             update_q = """
                 UPDATE scouting.rapporten SET
                     positie_gespeeld = %s, profiel_code = %s, advies = %s,
@@ -103,7 +95,6 @@ def save_report_to_db(data):
                 data['shortlist_id'], existing[0]
             ))
         else:
-            # INSERT (Nu met custom kolommen!)
             insert_q = """
                 INSERT INTO scouting.rapporten 
                 (scout_id, speler_id, wedstrijd_id, competitie_id, 
@@ -142,40 +133,32 @@ current_scout_name = st.session_state.user_info.get('naam', 'Onbekend')
 # -----------------------------------------------------------------------------
 st.title("📝 Live Match Scouting")
 
-# Variabelen resetten
 selected_match_id = None
 selected_comp_id = None
 custom_match_name = None
 home_team_name = "Thuis"
 away_team_name = "Uit"
 
-# Opties laden
 opties_posities = get_scouting_options_safe('opties_posities')
 opties_profielen = get_scouting_options_safe('opties_profielen')
 opties_advies = get_scouting_options_safe('opties_advies')
 opties_shortlists = get_scouting_options_safe('shortlists')
 
-# --- SIDEBAR LOGICA ---
 st.sidebar.header("Match Setup")
-is_manual_match = st.sidebar.checkbox("🔓 Manuele Wedstrijd", help="Vink dit aan voor oefenmatchen of wedstrijden die niet in de database staan.")
+is_manual_match = st.sidebar.checkbox("🔓 Manuele Wedstrijd", help="Voor oefenmatchen of niet-DB wedstrijden.")
 
 if is_manual_match:
-    # MANUELE MODUS
-    custom_match_name = st.sidebar.text_input("Naam Wedstrijd / Tegenstander", placeholder="bv. KVK - Harelbeke")
+    custom_match_name = st.sidebar.text_input("Naam Wedstrijd", placeholder="bv. KVK - Harelbeke")
     if not custom_match_name:
-        st.info("👈 Voer een wedstrijd naam in.")
-        st.stop()
+        st.info("👈 Voer een naam in."); st.stop()
     st.subheader(f"Wedstrijd: {custom_match_name}")
-
 else:
-    # DATABASE MODUS
     try:
         df_seasons = run_query("SELECT DISTINCT season FROM public.iterations ORDER BY season DESC")
         if not df_seasons.empty:
             seasons = df_seasons['season'].tolist()
             sel_season = st.sidebar.selectbox("1. Seizoen", seasons)
-        else:
-            st.error("Geen seizoenen gevonden."); st.stop()
+        else: st.error("Geen seizoenen."); st.stop()
     except Exception as e: st.error(f"DB Fout: {e}"); st.stop()
 
     if sel_season:
@@ -197,11 +180,10 @@ else:
             ORDER BY m."scheduledDate" DESC
         """
         df_matches = run_query(match_query, params=(sel_season, sel_comp))
-        if df_matches.empty: st.info("Geen wedstrijden."); st.stop()
+        if df_matches.empty: st.info("Geen gespeelde wedstrijden."); st.stop()
 
         match_opts = {f"{r['home']} vs {r['away']} ({r['scheduledDate'].strftime('%d-%m')})": r for _, r in df_matches.iterrows()}
         sel_match_label = st.sidebar.selectbox("3. Wedstrijd", list(match_opts.keys()))
-        
         sel_match_row = match_opts[sel_match_label]
         selected_match_id = str(sel_match_row['id'])
         selected_comp_id = str(sel_match_row['iterationId'])
@@ -213,11 +195,10 @@ st.sidebar.divider()
 st.sidebar.write(f"👤 **Scout:** {current_scout_name}")
 
 # -----------------------------------------------------------------------------
-# 3. SPELERS OPHALEN (HYBRIDE)
+# 3. SPELERS OPHALEN
 # -----------------------------------------------------------------------------
 df_players = pd.DataFrame()
 
-# A. DATABASE WEDSTRIJD -> Haal spelers op
 if selected_match_id:
     json_query = 'SELECT "squadHome", "squadAway" FROM public.match_details_full WHERE "id" = %s'
     try:
@@ -249,7 +230,6 @@ if selected_match_id:
                     df_players['commonname'] = df_players['commonname'].fillna("Onbekend")
                     df_players['shirt_number'] = pd.to_numeric(df_players['shirt_number'], errors='coerce').fillna(99)
                     df_players = df_players.sort_values(by=['side', 'shirt_number'])
-
     except Exception as e: st.error(f"Fout laden spelers: {e}")
 
 # -----------------------------------------------------------------------------
@@ -257,14 +237,13 @@ if selected_match_id:
 # -----------------------------------------------------------------------------
 col_list, col_editor = st.columns([1, 2])
 
-# Initialize session state for manual player entry logic
 if "manual_player_mode" not in st.session_state: st.session_state.manual_player_mode = False
 if "manual_player_name" not in st.session_state: st.session_state.manual_player_name = ""
 
 with col_list:
     st.subheader("Selecties")
     
-    # 1. Toon Database Spelers (Alleen als we in DB Match modus zitten en er spelers zijn)
+    # Als er spelers zijn, toon lijst
     if not is_manual_match and not df_players.empty:
         team_tab = st.radio("Team", [home_team_name, away_team_name], horizontal=True, label_visibility="collapsed")
         side_filter = 'home' if team_tab == home_team_name else 'away'
@@ -273,8 +252,6 @@ with col_list:
         for _, row in filtered_df.iterrows():
             pid = str(row['player_id'])
             pname = f"{int(row['shirt_number'])}. {row['commonname']}"
-            
-            # Draft check
             dkey = f"{selected_match_id}_{pid}_{current_scout_id}"
             has_draft = dkey in st.session_state.scout_drafts
             
@@ -283,54 +260,45 @@ with col_list:
             
             if st.button(f"{icon} {pname}", key=f"btn_{pid}", type=btn_type, use_container_width=True):
                 st.session_state.active_player_id = pid
-                st.session_state.manual_player_mode = False # We kiezen een bestaande speler
+                st.session_state.manual_player_mode = False
                 st.rerun()
 
-    # 2. Knop voor Manuele Speler (Altijd zichtbaar, of de enige optie bij manuele match)
     st.markdown("---")
-    
-    # Als we in manuele match modus zitten, of als de gebruiker op "Manueel" klikt
     if is_manual_match or st.button("➕ Speler handmatig toevoegen", use_container_width=True):
          st.session_state.manual_player_mode = True
-         st.session_state.active_player_id = None # Geen ID
+         st.session_state.active_player_id = None
 
     if st.session_state.manual_player_mode:
         st.info("Voer naam van de speler in:")
         manual_name_input = st.text_input("Naam Speler", value=st.session_state.manual_player_name, key="inp_manual_name_sidebar")
-        
-        # Sla op in state als er getypt wordt
         if manual_name_input:
             st.session_state.manual_player_name = manual_name_input
 
-# --- EDITOR ---
 with col_editor:
-    # Bepaal Identifiers voor opslaan/laden
     active_pid = None
     active_pname = "Onbekend"
     active_match_key = selected_match_id if selected_match_id else custom_match_name
     
-    # Scenario A: Bestaande Speler
-    if st.session_state.active_player_id and not st.session_state.manual_player_mode:
+    # SCENARIO A: Bestaande Speler (CHECK OP df_players.empty en Kolom!)
+    if st.session_state.active_player_id and not st.session_state.manual_player_mode and not df_players.empty and 'player_id' in df_players.columns:
         active_pid = str(st.session_state.active_player_id)
-        p_row = df_players[df_players['player_id'] == active_pid].iloc[0]
-        active_pname = p_row['commonname']
+        # Extra veiligheid: bestaat het ID wel in deze lijst?
+        if active_pid in df_players['player_id'].values:
+            p_row = df_players[df_players['player_id'] == active_pid].iloc[0]
+            active_pname = p_row['commonname']
+            
+            draft_key = f"{active_match_key}_{active_pid}_{current_scout_id}"
+            where_clause = "scout_id = %s AND speler_id = %s AND wedstrijd_id = %s"
+            params = (current_scout_id, active_pid, selected_match_id)
+        else:
+            # ID bestaat niet in de huidige lijst (misschien van andere match)
+            st.session_state.active_player_id = None
+            st.rerun()
         
-        draft_key = f"{active_match_key}_{active_pid}_{current_scout_id}"
-        
-        # Load Logic DB (ID based)
-        where_clause = "scout_id = %s AND speler_id = %s AND wedstrijd_id = %s"
-        params = (current_scout_id, active_pid, selected_match_id)
-        
-    # Scenario B: Manuele Speler (of Manuele Match)
+    # SCENARIO B: Manuele Speler
     elif st.session_state.manual_player_mode and st.session_state.manual_player_name:
         active_pname = st.session_state.manual_player_name
-        # Gebruik naam in de key
         draft_key = f"{active_match_key}_{active_pname}_{current_scout_id}"
-        
-        # Load Logic DB (Custom Name based)
-        # Let op: we moeten hier flexibel zijn. 
-        # Als match_id er is -> gebruik match_id + custom_speler
-        # Als match_id er NIET is -> gebruik custom_wedstrijd + custom_speler
         
         if selected_match_id:
             where_clause = "scout_id = %s AND custom_speler_naam = %s AND wedstrijd_id = %s"
@@ -340,15 +308,12 @@ with col_editor:
             params = (current_scout_id, active_pname, custom_match_name)
             
     else:
-        if is_manual_match:
-             st.info("👈 Voer hiernaast een spelernaam in.")
-        else:
-             st.info("👈 Selecteer een speler.")
+        if is_manual_match: st.info("👈 Voer een spelernaam in.")
+        else: st.info("👈 Selecteer een speler.")
         st.stop()
 
     st.subheader(f"Rapport: {active_pname}")
 
-    # --- DATALOADER ---
     if draft_key not in st.session_state.scout_drafts:
         db_q = f"SELECT * FROM scouting.rapporten WHERE {where_clause}"
         existing = run_query(db_q, params=params)
@@ -368,42 +333,34 @@ with col_editor:
             }
     
     draft = st.session_state.scout_drafts[draft_key]
-    
-    # --- FORMULIER ---
-    unique_suffix = f"{draft_key}" # Maak keys uniek op basis van de draft combo
+    unique_suffix = f"{draft_key}"
 
     c1, c2 = st.columns(2)
     def get_idx(val, opts): return opts.index(val) if val in opts else 0
 
     with c1:
         pos_opts = opties_posities['value'].tolist(); pos_lbls = opties_posities['label'].tolist()
-        curr_pos = draft['positie']
-        idx_pos = pos_opts.index(curr_pos) if curr_pos in pos_opts else 0
-        new_pos = st.selectbox("Positie", pos_opts, index=idx_pos, format_func=lambda x: pos_lbls[pos_opts.index(x)] if x in pos_opts else x, key=f"pos_{unique_suffix}")
-        
-        new_rating = st.slider("Beoordeling (1-10)", 1, 10, draft["rating"], key=f"rate_{unique_suffix}")
+        idx_pos = pos_opts.index(draft['positie']) if draft['positie'] in pos_opts else 0
+        new_pos = st.selectbox("Positie", pos_opts, index=idx_pos, format_func=lambda x: pos_lbls[pos_opts.index(x)], key=f"pos_{unique_suffix}")
+        new_rating = st.slider("Beoordeling", 1, 10, draft["rating"], key=f"rate_{unique_suffix}")
 
     with c2:
         adv_opts = opties_advies['value'].tolist(); adv_lbls = opties_advies['label'].tolist()
-        curr_adv = draft['advies']
-        idx_adv = adv_opts.index(curr_adv) if curr_adv in adv_opts else 0
-        new_adv = st.selectbox("Advies", adv_opts, index=idx_adv, format_func=lambda x: adv_lbls[adv_opts.index(x)] if x in adv_opts else x, key=f"adv_{unique_suffix}")
+        idx_adv = adv_opts.index(draft['advies']) if draft['advies'] in adv_opts else 0
+        new_adv = st.selectbox("Advies", adv_opts, index=idx_adv, format_func=lambda x: adv_lbls[adv_opts.index(x)], key=f"adv_{unique_suffix}")
 
         prof_opts = opties_profielen['value'].tolist(); prof_lbls = opties_profielen['label'].tolist()
-        curr_prof = draft['profiel']
-        idx_prof = prof_opts.index(curr_prof) if curr_prof in prof_opts else 0
-        new_prof = st.selectbox("Profiel", prof_opts, index=idx_prof, format_func=lambda x: prof_lbls[prof_opts.index(x)] if x in prof_opts else x, key=f"prof_{unique_suffix}")
+        idx_prof = prof_opts.index(draft['profiel']) if draft['profiel'] in prof_opts else 0
+        new_prof = st.selectbox("Profiel", prof_opts, index=idx_prof, format_func=lambda x: prof_lbls[prof_opts.index(x)], key=f"prof_{unique_suffix}")
 
     new_tekst = st.text_area("Rapportage", draft["tekst"], height=200, key=f"txt_{unique_suffix}")
     
     ce1, ce2 = st.columns(2)
-    with ce1: 
-        new_gouden = st.checkbox("🏆 Gouden Buzzer", draft["gouden_buzzer"], key=f"gold_{unique_suffix}")
+    with ce1: new_gouden = st.checkbox("🏆 Gouden Buzzer", draft["gouden_buzzer"], key=f"gold_{unique_suffix}")
     with ce2:
         sl_opts = [None] + opties_shortlists['value'].tolist()
         sl_lbls = ["Geen"] + opties_shortlists['label'].tolist()
-        curr_sl = draft['shortlist']
-        idx_sl = sl_opts.index(curr_sl) if curr_sl in sl_opts else 0
+        idx_sl = sl_opts.index(draft['shortlist']) if draft['shortlist'] in sl_opts else 0
         def fmt_sl(x):
             try: return sl_lbls[sl_opts.index(x)]
             except: return "Geen"
@@ -418,9 +375,9 @@ with col_editor:
     if st.button("💾 Rapport Opslaan", type="primary", use_container_width=True, key=f"save_{unique_suffix}"):
         save_data = {
             "scout_id": current_scout_id,
-            "speler_id": active_pid, # Kan None zijn
-            "wedstrijd_id": selected_match_id, # Kan None zijn
-            "competitie_id": selected_comp_id, # Kan None zijn
+            "speler_id": active_pid, 
+            "wedstrijd_id": selected_match_id,
+            "competitie_id": selected_comp_id,
             "custom_speler_naam": active_pname if not active_pid else None,
             "custom_wedstrijd_naam": custom_match_name if not selected_match_id else None,
             "positie_gespeeld": new_pos, "profiel_code": new_prof, "advies": new_adv,
