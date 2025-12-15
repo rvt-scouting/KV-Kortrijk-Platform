@@ -48,21 +48,27 @@ if sel_season and sel_comp:
         
     match_opts = {f"{r['home']} - {r['away']} ({r['scheduledDate'].strftime('%d-%m')})": r['id'] for _, r in df_matches.iterrows()}
     sel_match_label = st.sidebar.selectbox("Wedstrijd", list(match_opts.keys()))
-    sel_match_id = match_opts[sel_match_label]
+    sel_match_id = str(match_opts[sel_match_label]) # Forceer string
     match_row = df_matches[df_matches['id'] == sel_match_id].iloc[0]
 else:
     st.stop()
 
 st.title(f"🏟️ {match_row['home']} vs {match_row['away']}")
-st.caption(f"Datum: {match_row['scheduledDate'].strftime('%d-%m-%Y %H:%M')}")
+st.caption(f"Datum: {match_row['scheduledDate'].strftime('%d-%m-%Y %H:%M')} | Match ID: {sel_match_id}")
 
 # -----------------------------------------------------------------------------
-# 2. DATA OPHALEN (UPDATED JSON PATHS & JOIN FIX)
+# 2. DATA OPHALEN (ROBUUST)
 # -----------------------------------------------------------------------------
 @st.cache_data
 def get_match_events(match_id):
-    # FIX: We joinen players p nu op basis van TEXT vergelijking
-    # e.player ->> 'id' geeft tekst terug. p.id casten we naar tekst voor zekerheid.
+    # 1. DEBUG CHECK: Zijn er überhaupt events?
+    check_q = 'SELECT COUNT(*) as cnt FROM public.match_events WHERE "matchId" = %s'
+    check_df = run_query(check_q, (match_id,))
+    if check_df.empty or check_df.iloc[0]['cnt'] == 0:
+        return pd.DataFrame() # Leeg teruggeven
+
+    # 2. DATA OPHALEN
+    # We gebruiken TRIM en CAST om zeker te zijn dat de joins werken
     q = """
         SELECT 
             e.id,
@@ -77,22 +83,22 @@ def get_match_events(match_id):
             (e."gameTime" ->> 'gameTime') as "Tijd",
             CAST(e."gameTime" ->> 'gameTimeInSec' AS FLOAT) / 60.0 as "Minuut",
             
-            -- Start Coördinaten (Nested)
+            -- Start Coördinaten (Veilige JSON extractie)
             CAST(e."start" -> 'coordinates' ->> 'x' AS FLOAT) as x_start,
             CAST(e."start" -> 'coordinates' ->> 'y' AS FLOAT) as y_start,
             
-            -- Eind Coördinaten (Nested, kan null zijn)
+            -- Eind Coördinaten
             CAST(e."end" -> 'coordinates' ->> 'x' AS FLOAT) as x_end,
             CAST(e."end" -> 'coordinates' ->> 'y' AS FLOAT) as y_end,
             
-            -- Extra data (Pass afstand, xT)
+            -- Extra data
             CAST(e."pass" ->> 'distance' AS FLOAT) as "Pass Afstand",
             CAST(e."pxT" ->> 'team' AS FLOAT) as "xT"
 
         FROM public.match_events e
-        LEFT JOIN public.squads sq ON e."squadId" = sq.id
+        LEFT JOIN public.squads sq ON CAST(e."squadId" AS TEXT) = CAST(sq.id AS TEXT)
         LEFT JOIN public.players p ON (e.player ->> 'id') = CAST(p.id AS TEXT)
-        WHERE e."matchId" = %s
+        WHERE TRIM(e."matchId") = TRIM(%s)
         ORDER BY e.index ASC
     """
     return run_query(q, (match_id,))
@@ -101,7 +107,8 @@ with st.spinner("Event data laden..."):
     df_events = get_match_events(sel_match_id)
 
 if df_events.empty:
-    st.info("Geen event data beschikbaar.")
+    st.warning(f"⚠️ Geen event data gevonden voor Match ID {sel_match_id}.")
+    st.info("Mogelijke oorzaken: Data nog niet ingeladen, of ID mismatch in database.")
     st.stop()
 
 # -----------------------------------------------------------------------------
@@ -114,12 +121,10 @@ with tab1:
     home_id = match_row['homeSquadId']
     away_id = match_row['awaySquadId']
 
-    # Home Score: Goals door Home + Own Goals door Away
     goals_home = df_events[(df_events['squadId'] == home_id) & (df_events['action'] == 'Goal') & (df_events['result'] == 'Success')]
     own_goals_away = df_events[(df_events['squadId'] == away_id) & (df_events['action'] == 'Own Goal') & (df_events['result'] == 'Success')]
     score_home = len(goals_home) + len(own_goals_away)
 
-    # Away Score: Goals door Away + Own Goals door Home
     goals_away = df_events[(df_events['squadId'] == away_id) & (df_events['action'] == 'Goal') & (df_events['result'] == 'Success')]
     own_goals_home = df_events[(df_events['squadId'] == home_id) & (df_events['action'] == 'Own Goal') & (df_events['result'] == 'Success')]
     score_away = len(goals_away) + len(own_goals_home)
@@ -150,14 +155,12 @@ with tab1:
     c_xt1, c_xt2 = st.columns(2)
     
     with c_xt1:
-        # Totaal xT per team
         if 'xT' in df_events.columns:
             xt_stats = df_events.groupby('Team')['xT'].sum().reset_index()
             fig_xt = px.bar(xt_stats, x='Team', y='xT', title="Expected Threat (xT) Totaal", color='Team')
             st.plotly_chart(fig_xt, use_container_width=True)
         
     with c_xt2:
-        # Passen
         passes = df_events[(df_events['action'] == 'Pass') & (df_events['result'] == 'Success')]
         if not passes.empty:
             p_counts = passes['Team'].value_counts().reset_index()
@@ -197,7 +200,7 @@ with tab2:
     if not df_m.empty:
         fig = go.Figure()
 
-        # VELD ACHTERGROND (105x68 Standaard, genormaliseerd 0-100)
+        # VELD ACHTERGROND (100x100)
         fig.add_shape(type="rect", x0=0, y0=0, x1=100, y1=100, line=dict(color="white"), fillcolor="#4CAF50", layer="below")
         fig.add_shape(type="line", x0=50, y0=0, x1=50, y1=100, line=dict(color="white", width=2))
         fig.add_shape(type="circle", x0=40, y0=40, x1=60, y1=60, line=dict(color="white", width=2))
@@ -211,7 +214,7 @@ with tab2:
             dft = df_m[df_m['Team'] == team]
             color = colors[i % len(colors)]
             
-            # Markers (Startpositie)
+            # Markers
             fig.add_trace(go.Scatter(
                 x=dft['x_start'], y=dft['y_start'],
                 mode='markers', name=team,
@@ -221,9 +224,9 @@ with tab2:
                 customdata=dft[['Tijd', 'xT']]
             ))
             
-            # LIJNEN (Voor passes of runs)
+            # LIJNEN
             if show_lines:
-                if len(dft) < 1000: # Performance limit
+                if len(dft) < 1000: 
                     for _, row in dft.iterrows():
                         if pd.notnull(row['x_end']) and pd.notnull(row['y_end']):
                             fig.add_trace(go.Scatter(
@@ -236,7 +239,7 @@ with tab2:
                                 hoverinfo='skip'
                             ))
                 else:
-                    st.caption(f"⚠️ Te veel events ({len(dft)}) om lijnen te tekenen voor {team}. Filter meer.")
+                    st.caption(f"⚠️ Te veel events ({len(dft)}) om lijnen te tekenen voor {team}.")
 
         fig.update_layout(
             width=800, height=650,
@@ -246,7 +249,6 @@ with tab2:
             margin=dict(l=10, r=10, t=30, b=10)
         )
         st.plotly_chart(fig, use_container_width=True)
-        
     else:
         st.info("Geen events met deze filters.")
 
