@@ -1,57 +1,171 @@
 import streamlit as st
 import pandas as pd
-from utils import run_query # We hebben dit nodig om later naar de DB te schrijven
+from datetime import datetime
+from utils import run_query, init_connection
 
 st.set_page_config(page_title="Aangeboden Spelers", page_icon="📥", layout="wide")
-
 st.title("📥 Aangeboden Spelers")
 
-# We gebruiken Tabs voor een nette indeling
+# -----------------------------------------------------------------------------
+# 1. HULPFUNCTIE VOOR SCHRIJVEN (INSERT/UPDATE)
+# -----------------------------------------------------------------------------
+def execute_command(query, params=None):
+    """ Voert een SQL commando uit dat geen data teruggeeft (INSERT, UPDATE, DELETE) """
+    conn = None
+    try:
+        conn = init_connection()
+        cur = conn.cursor()
+        cur.execute(query, params)
+        conn.commit() # Belangrijk: bevestig de wijziging
+        cur.close()
+        return True
+    except Exception as e:
+        st.error(f"Database Fout: {e}")
+        return False
+    finally:
+        if conn: conn.close()
+
+# -----------------------------------------------------------------------------
+# 2. TAB BLADEN
+# -----------------------------------------------------------------------------
 tab1, tab2 = st.tabs(["➕ Nieuwe speler toevoegen", "📋 Overzichtlijst"])
 
+# =============================================================================
+# TAB 1: TOEVOEGEN
+# =============================================================================
 with tab1:
     st.header("Nieuwe speler registreren")
-    st.info("Hier registreren we spelers die door makelaars zijn aangeboden.")
+    st.info("Zoek eerst de speler in onze database om de koppeling te maken.")
     
-    with st.form("offered_player_form"):
-        c1, c2 = st.columns(2)
-        with c1:
-            naam = st.text_input("Naam Speler")
-            leeftijd = st.number_input("Leeftijd", min_value=15, max_value=45, step=1)
-            positie = st.selectbox("Positie", ["Doelman", "Verdediger", "Middenvelder", "Aanvaller"])
-            club = st.text_input("Huidige Club")
-        
-        with c2:
-            makelaar = st.text_input("Makelaar / Bureau")
-            vraagprijs = st.number_input("Vraagprijs (geschat)", min_value=0, step=10000)
-            video_link = st.text_input("Link naar Video (Wyscout/YouTube)")
-            status = st.selectbox("Status", ["Te bekijken", "Interessant", "Afgekeurd", "Onderhandeling"])
+    # A. Speler Zoeken in public.players
+    c_search, c_select = st.columns([1, 2])
+    
+    with c_search:
+        search_term = st.text_input("🔍 Typ naam speler:", placeholder="bv. Messi")
+    
+    selected_player_id = None
+    player_display_name = ""
+    
+    with c_select:
+        if len(search_term) > 2:
+            # We zoeken in de bestaande spelers tabel
+            # We halen ook het huidige team op voor context
+            search_q = """
+                SELECT p.id, p.commonname, sq.name as "team"
+                FROM public.players p
+                LEFT JOIN public.squads sq ON p."currentSquadId" = sq.id
+                WHERE p.commonname ILIKE %s
+                LIMIT 20
+            """
+            df_results = run_query(search_q, params=(f"%{search_term}%",))
             
-        opmerkingen = st.text_area("Korte Opmerking / Profiel")
-        
-        # De knop om te verzenden
-        submitted = st.form_submit_button("💾 Opslaan in Database")
-        
-        if submitted:
-            if naam and makelaar:
-                # LATER: Hier komt de SQL INSERT query
-                st.success(f"Speler **{naam}** succesvol toegevoegd (Simulatie)!")
-                st.balloons()
+            if not df_results.empty:
+                # Maak een dictionary voor de dropdown: "Naam (Team)" -> ID
+                options = {f"{row['commonname']} ({row['team'] or 'Geen Club'})": row['id'] for _, row in df_results.iterrows()}
+                selected_label = st.selectbox("Selecteer de juiste speler:", list(options.keys()))
+                
+                if selected_label:
+                    selected_player_id = options[selected_label]
+                    player_display_name = selected_label.split(" (")[0]
             else:
-                st.error("Vul minstens de naam en makelaar in.")
+                st.warning("Geen spelers gevonden.")
+        else:
+            st.caption("Typ minimaal 3 letters om te zoeken.")
 
+    st.divider()
+
+    # B. Het Formulier (Alleen tonen als er een ID is of als fallback)
+    # We blokkeren het formulier niet volledig, maar waarschuwen wel als er geen ID is.
+    
+    if selected_player_id:
+        st.success(f"Geselecteerd: **{player_display_name}** (ID: {selected_player_id})")
+        
+        with st.form("offered_player_form"):
+            c1, c2 = st.columns(2)
+            with c1:
+                makelaar = st.text_input("Makelaar / Bureau")
+                vraagprijs = st.number_input("Vraagprijs (€)", min_value=0, step=10000, format="%d")
+            
+            with c2:
+                video_link = st.text_input("Link naar Video (Wyscout/YouTube)")
+                status = st.selectbox("Status", ["Te bekijken", "Interessant", "Afgekeurd", "Onderhandeling", "In de gaten houden"])
+            
+            opmerkingen = st.text_area("Korte Opmerking / Scoutingsverslag")
+            
+            # Automatisch de gebruiker ophalen die is ingelogd
+            user_name = st.session_state.user_info.get('naam', 'Onbekend') if 'user_info' in st.session_state and st.session_state.user_info else "Systeem"
+
+            submitted = st.form_submit_button("💾 Opslaan in Database")
+            
+            if submitted:
+                if makelaar:
+                    insert_q = """
+                        INSERT INTO scouting.offered_players 
+                        (player_id, makelaar, vraagprijs, video_link, status, opmerkingen, ingevoerd_door)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """
+                    success = execute_command(insert_q, params=(
+                        str(selected_player_id), 
+                        makelaar, 
+                        vraagprijs, 
+                        video_link, 
+                        status, 
+                        opmerkingen, 
+                        user_name
+                    ))
+                    
+                    if success:
+                        st.success(f"Speler **{player_display_name}** succesvol opgeslagen!")
+                        st.balloons()
+                else:
+                    st.error("Vul in ieder geval de makelaar in.")
+    else:
+        if len(search_term) > 2:
+            st.info("👆 Selecteer hierboven een speler om het formulier te openen.")
+
+# =============================================================================
+# TAB 2: OVERZICHT
+# =============================================================================
 with tab2:
     st.header("📋 Recente aanbiedingen")
     
-    # LATER: Hier halen we data uit de database: SELECT * FROM scouting.offered_players
-    # Voor nu maken we even dummy data zodat je het idee ziet
-    dummy_data = {
-        "Naam": ["Lionel Messi", "Cristiano Ronaldo", "Kevin De Bruyne"],
-        "Leeftijd": [36, 39, 32],
-        "Club": ["Inter Miami", "Al Nassr", "Man City"],
-        "Makelaar": ["Jorge Messi", "Mendes", "Roc Nation"],
-        "Status": ["Te duur", "Afgekeurd", "Interessant"]
-    }
-    df_dummy = pd.DataFrame(dummy_data)
+    # We joinen nu de scouting tabel terug aan de public.players tabel
+    # Zo halen we de 'verse' naam en team op, ipv wat we ooit hebben ingetypt
+    overview_query = """
+        SELECT 
+            o.id,
+            p.commonname as "Naam",
+            sq.name as "Huidig Team",
+            p.birthdate as "Geboortedatum",
+            o.status as "Status",
+            o.makelaar as "Makelaar",
+            o.vraagprijs as "Vraagprijs",
+            o.opmerkingen as "Notities",
+            o.ingevoerd_door as "Scout",
+            o.aangeboden_datum as "Datum"
+        FROM scouting.offered_players o
+        JOIN public.players p ON o.player_id = p.id
+        LEFT JOIN public.squads sq ON p."currentSquadId" = sq.id
+        ORDER BY o.aangeboden_datum DESC
+    """
     
-    st.dataframe(df_dummy, use_container_width=True)
+    try:
+        df_overview = run_query(overview_query)
+        
+        if not df_overview.empty:
+            # Opmaak voor de tabel
+            st.dataframe(
+                df_overview, 
+                use_container_width=True,
+                column_config={
+                    "Vraagprijs": st.column_config.NumberColumn(format="€ %.2f"),
+                    "Datum": st.column_config.DatetimeColumn(format="DD-MM-YYYY"),
+                    "Video Link": st.column_config.LinkColumn("Video")
+                },
+                hide_index=True
+            )
+        else:
+            st.info("Nog geen spelers aangeboden.")
+            
+    except Exception as e:
+        st.error(f"Fout bij ophalen lijst: {e}")
