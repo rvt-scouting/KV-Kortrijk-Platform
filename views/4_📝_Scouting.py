@@ -3,7 +3,7 @@ import pandas as pd
 import json
 from utils import run_query, init_connection
 
-st.set_page_config(page_title="Live Scouting", page_icon="📝", layout="wide")
+st.set_page_config(page_title="Speler Scouting", page_icon="📝", layout="wide")
 
 # -----------------------------------------------------------------------------
 # 0. SESSION STATE INITIALISATIES (Bovenaan om errors te voorkomen!)
