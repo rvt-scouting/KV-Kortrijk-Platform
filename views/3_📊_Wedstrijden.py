@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from utils import run_query
+import json
 
 st.set_page_config(page_title="Match Events", page_icon="🏟️", layout="wide")
 
@@ -74,7 +75,7 @@ st.title(f"🏟️ {match_row['home']} vs {match_row['away']}")
 st.caption(f"Datum: {match_row['scheduledDate'].strftime('%d-%m-%Y %H:%M')}")
 
 # -----------------------------------------------------------------------------
-# 2. DATA OPHALEN
+# 2. DATA OPHALEN EVENTS (Bestaand)
 # -----------------------------------------------------------------------------
 @st.cache_data
 def get_match_data_optimized(match_id):
@@ -85,12 +86,11 @@ def get_match_data_optimized(match_id):
             (e.player ->> 'id') as player_id_raw,
             (e."gameTime" ->> 'gameTime') as "TijdString",
             
-            -- Extra Kolommen
             e."distanceToOpponent",
             e."phase",
             e."pressure",
             e."periodId",
-            e."pressingPlayerId", -- NIEUW
+            e."pressingPlayerId",
             
             CAST(e."start" -> 'coordinates' ->> 'x' AS FLOAT) as x_start,
             CAST(e."start" -> 'coordinates' ->> 'y' AS FLOAT) as y_start,
@@ -119,15 +119,10 @@ def get_match_data_optimized(match_id):
                 squad_map = dict(zip(df_sq['id'].astype(str), df_sq['name']))
     df_ev['Team'] = df_ev['squadId'].astype(str).map(squad_map).fillna('Onbekend')
 
-    # Spelers Map (Nu voor BEIDE: uitvoerend én pressing speler)
-    # We verzamelen alle IDs in één lijst om efficiënt te queryen
+    # Spelers Map
     p_ids_1 = df_ev['player_id_raw'].dropna().unique().tolist()
     p_ids_2 = df_ev['pressingPlayerId'].dropna().unique().tolist()
-    
-    # Combineer en maak uniek
     all_p_ids = list(set(p_ids_1 + p_ids_2))
-    
-    # Filter op digits
     all_p_ids = [str(pid) for pid in all_p_ids if str(pid).isdigit()]
     
     player_map = {}
@@ -138,29 +133,133 @@ def get_match_data_optimized(match_id):
             if not df_pl.empty:
                 player_map = dict(zip(df_pl['id'].astype(str), df_pl['commonname']))
     
-    # Map de namen
     df_ev['Speler'] = df_ev['player_id_raw'].astype(str).map(player_map).fillna('Onbekend')
-    # Map de pressing speler naam, laat leeg (of '-') als er geen is
     df_ev['PressingSpeler'] = df_ev['pressingPlayerId'].astype(str).map(player_map).fillna('-')
 
     return df_ev
 
+# -----------------------------------------------------------------------------
+# 3. DATA OPHALEN OPSTELLINGEN (NIEUW)
+# -----------------------------------------------------------------------------
+@st.cache_data
+def get_match_lineups(match_id):
+    # We halen de JSON data op uit match_details_full
+    # Aanname: id in match_details_full == match_id
+    q = 'SELECT "squadHome", "squadAway" FROM public.match_details_full WHERE id = %s'
+    df_details = run_query(q, (match_id,))
+    
+    if df_details.empty:
+        return None, None
+    
+    row = df_details.iloc[0]
+    
+    # Functie om 1 team te parsen
+    def parse_squad_json(squad_data):
+        if not squad_data: return {}
+        # Check of het al dict is of string
+        if isinstance(squad_data, str):
+            data = json.loads(squad_data)
+        else:
+            data = squad_data
+            
+        coach_id = data.get('coachId')
+        players_raw = data.get('players', [])
+        starting_raw = data.get('startingPositions', [])
+        
+        # Maak set van starters voor snelle lookup
+        starters_map = {str(p['playerId']): p for p in starting_raw}
+        
+        roster = []
+        player_ids_to_fetch = []
+        
+        # Verwerk spelers
+        for p in players_raw:
+            pid = str(p['id'])
+            shirt = p.get('shirtNumber', '-')
+            player_ids_to_fetch.append(pid)
+            
+            if pid in starters_map:
+                role = "Basis"
+                pos = starters_map[pid].get('position', '?')
+                pos_side = starters_map[pid].get('positionSide', '')
+            else:
+                role = "Wissel"
+                pos = "Bank"
+                pos_side = ""
+            
+            roster.append({
+                'id': pid,
+                'shirt': shirt,
+                'role': role,
+                'position': pos,
+                'side': pos_side
+            })
+            
+        return {
+            'coachId': str(coach_id) if coach_id else None,
+            'roster': roster,
+            'ids': player_ids_to_fetch
+        }
+
+    home_parsed = parse_squad_json(row['squadHome'])
+    away_parsed = parse_squad_json(row['squadAway'])
+    
+    # Namen ophalen (Spelers & Coaches)
+    all_player_ids = home_parsed['ids'] + away_parsed['ids']
+    all_coach_ids = [x for x in [home_parsed['coachId'], away_parsed['coachId']] if x]
+    
+    # Fetch Player Names
+    p_map = {}
+    if all_player_ids:
+        # Filter digits
+        clean_p_ids = [x for x in all_player_ids if x.isdigit()]
+        if clean_p_ids:
+            p_str = ", ".join(f"'{x}'" for x in clean_p_ids)
+            df_p = run_query(f"SELECT id, commonname FROM public.players WHERE id IN ({p_str})")
+            if not df_p.empty:
+                p_map = dict(zip(df_p['id'].astype(str), df_p['commonname']))
+
+    # Fetch Coach Names (Aanname tabel public.coaches, kolommen id en name of commonname)
+    c_map = {}
+    if all_coach_ids:
+        clean_c_ids = [x for x in all_coach_ids if x.isdigit()]
+        if clean_c_ids:
+            c_str = ", ".join(f"'{x}'" for x in clean_c_ids)
+            # Probeer 'name', fallback als het niet bestaat
+            try:
+                df_c = run_query(f"SELECT id, name FROM public.coaches WHERE id IN ({c_str})")
+                if not df_c.empty:
+                    c_map = dict(zip(df_c['id'].astype(str), df_c['name']))
+            except:
+                pass # Tabel bestaat misschien niet of andere kolomnaam
+
+    # Verrijk de parsed data met namen
+    def enrich(parsed):
+        parsed['coachName'] = c_map.get(parsed['coachId'], 'Onbekend')
+        for p in parsed['roster']:
+            p['name'] = p_map.get(p['id'], 'Onbekend')
+        return parsed
+
+    return enrich(home_parsed), enrich(away_parsed)
+
+
+# RUN ANALYSES
 with st.spinner("Bezig met analyseren..."):
     df_events = get_match_data_optimized(sel_match_id)
+    lineup_home, lineup_away = get_match_lineups(sel_match_id)
 
 if df_events.empty:
-    st.warning("Geen data.")
-    st.stop()
+    st.warning("Geen events data.")
+    # We stoppen hier niet, want misschien is er wel lineup data
 
 # -----------------------------------------------------------------------------
-# 3. VERWERKING & LOGICA
+# VERWERKING LOGICA (Events)
 # -----------------------------------------------------------------------------
 df_events['action_clean'] = df_events['action'].astype(str).str.upper().str.strip()
 df_events['result_clean'] = df_events['result'].astype(str).str.upper().str.strip()
 home_id_str = normalize_id(match_row['homeSquadId'])
 df_events['squadId_clean'] = df_events['squadId'].apply(normalize_id)
 
-# xT
 df_events['xT_Team_Raw'] = df_events['xT_Team_Raw'].fillna(0)
 df_events['xT_Opp_Raw'] = df_events['xT_Opp_Raw'].fillna(0)
 
@@ -185,9 +284,9 @@ team_colors = {match_row['home']: '#e74c3c', match_row['away']: '#3498db', 'Onbe
 result_colors = {'SUCCESS': '#2ecc71', 'FAIL': '#e74c3c', 'OFFSIDE': '#95a5a6', 'NONE': '#bdc3c7', 'nan': '#bdc3c7', '': '#bdc3c7'}
 
 # -----------------------------------------------------------------------------
-# 4. DASHBOARD
+# 4. DASHBOARD TABS
 # -----------------------------------------------------------------------------
-tab1, tab2, tab3, tab4 = st.tabs(["📊 Stats & Tijdlijn", "📍 Pitch Map & Radar", "🏃 Spelers xT (Top)", "📋 Data"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Stats & Tijdlijn", "📍 Pitch Map & Radar", "🏃 Spelers xT", "👥 Opstellingen", "📋 Data"])
 
 with tab1:
     # --- SCOREBORD ---
@@ -270,28 +369,19 @@ with tab1:
 with tab2:
     st.subheader("📍 Event Map Analysis")
     
-    # Gebruik kolommen voor filters. BELANGRIJK: gebruik 'key' parameters om reset te voorkomen.
     c1, c2, c3, c4 = st.columns(4)
-    
     teams = df_events['Team'].unique()
     sel_teams = c1.multiselect("Teams", teams, default=teams, key="pm_teams")
-    
     acts = df_events['action_clean'].unique()
     def_acts = [x for x in ['SHOT','GOAL'] if x in acts]
     sel_acts = c2.multiselect("Acties", acts, default=def_acts, key="pm_acts")
-    
-    # PERIODE FILTER
     periods = sorted(df_events['periodId'].astype(str).unique())
     sel_period = c3.multiselect("Periode / Helft", periods, default=periods, key="pm_period")
-    
     plys = df_events['Speler'].unique()
     sel_plys = c4.multiselect("Speler", plys, key="pm_plys")
     
-    # EXTRA FILTERS (Rij 2)
     st.markdown("### Extra Filters & Opties")
     f_c1, f_c2, f_c3 = st.columns(3)
-    
-    # Distance Filter
     try:
         dist_vals = df_events['distanceToOpponent'].dropna().unique()
         dist_opts = sorted(dist_vals, key=lambda x: float(x))
@@ -299,7 +389,6 @@ with tab2:
         dist_opts = sorted(df_events['distanceToOpponent'].dropna().astype(str).unique())
     sel_dist = f_c1.multiselect("Afstand tot Opponent", dist_opts, key="pm_dist")
     
-    # Pressure Filter
     try:
         pres_vals = df_events['pressure'].dropna().unique()
         pres_opts = sorted(pres_vals, key=lambda x: float(x))
@@ -307,13 +396,11 @@ with tab2:
         pres_opts = sorted(df_events['pressure'].dropna().astype(str).unique())
     sel_pres = f_c2.multiselect("Pressure", pres_opts, key="pm_pres")
     
-    # Phase Filter
     phases = sorted(df_events['phase'].dropna().astype(str).unique().tolist())
     sel_phase = f_c3.multiselect("Spelfase", phases, key="pm_phase")
     
-    # VISUALISATIE OPTIES
     v_c1, v_c2 = st.columns(2)
-    show_lines = v_c1.checkbox("Toon Pass/Looplijnen (Start -> Eind)", value=False, key="pm_lines")
+    show_lines = v_c1.checkbox("Toon Pass/Looplijnen", value=False, key="pm_lines")
     color_mode = v_c2.radio("Kleur op basis van:", ["Team", "Resultaat (Succes/Fail)"], horizontal=True, key="pm_color")
 
     # FILTER DATA
@@ -323,13 +410,11 @@ with tab2:
     ].copy() 
 
     if sel_period: df_m = df_m[df_m['periodId'].astype(str).isin(sel_period)]
-    
     if sel_dist: df_m = df_m[df_m['distanceToOpponent'].isin(sel_dist)]
     if sel_pres: df_m = df_m[df_m['pressure'].isin(sel_pres)]
     if sel_phase: df_m = df_m[df_m['phase'].isin(sel_phase)]
     if sel_plys: df_m = df_m[df_m['Speler'].isin(sel_plys)]
     
-    # 1. PITCH MAP
     if not df_m.empty:
         fig = go.Figure()
         # VELD CONFIGURATIE -52.5 tot 52.5
@@ -359,18 +444,16 @@ with tab2:
 
             if d.empty: continue
 
-            # MARKERS (Met Pressing in Tooltip)
+            # MARKERS
             fig.add_trace(go.Scatter(
                 x=d['x_start'], y=d['y_start'], 
                 mode='markers', name=name_lbl,
                 marker=dict(color=color, size=8, line=dict(width=1,color='black')),
                 text=d['Speler'] + " (" + d['action'] + ") [" + d['result_clean'] + "]",
-                # HIERONDER: customdata[3] is PressingSpeler
                 hovertemplate="%{text}<br>DistOpp: %{customdata[1]}<br>Press: %{customdata[2]}<br>Pressing Speler: %{customdata[3]}",
                 customdata=d[['TijdString', 'distanceToOpponent', 'pressure', 'PressingSpeler']]
             ))
             
-            # LIJNEN
             if show_lines and len(d) < 2000:
                 x_lines = []
                 y_lines = []
@@ -400,13 +483,11 @@ with tab2:
     else:
         st.info("Geen events met deze filters.")
 
-    # 2. RADAR CHART
+    # RADAR CHART
     st.divider()
     st.subheader("🕸️ Spider Diagram: Team Vergelijking")
-    
     if not df_m.empty and len(sel_acts) > 0:
         radar_agg = df_m.groupby(['Team', 'action_clean']).size().reset_index(name='Count')
-        
         fig_rad = go.Figure()
         for t in sel_teams:
             vals = []
@@ -417,13 +498,11 @@ with tab2:
             if vals:
                 vals_plot = vals + [vals[0]]
                 thetas_plot = sel_acts + [sel_acts[0]]
-                
                 fig_rad.add_trace(go.Scatterpolar(
                     r=vals_plot, theta=thetas_plot,
                     fill='toself', name=t,
                     line_color=team_colors.get(t, '#95a5a6')
                 ))
-        
         fig_rad.update_layout(polar=dict(radialaxis=dict(visible=True)), showlegend=True, height=500)
         st.plotly_chart(fig_rad, use_container_width=True)
 
@@ -446,9 +525,45 @@ with tab3:
         st.plotly_chart(fig_bar, use_container_width=True)
 
 # -----------------------------------------------------------------------------
-# TAB 4: RAW
+# TAB 4: OPSTELLINGEN (NIEUW)
 # -----------------------------------------------------------------------------
 with tab4:
+    st.subheader("👥 Opstellingen")
+    
+    if lineup_home and lineup_away:
+        col_h, col_a = st.columns(2)
+        
+        # Functie om opstelling te renderen
+        def render_lineup(data, team_name, color):
+            with st.container():
+                st.markdown(f"<h3 style='color:{color}'>{team_name}</h3>", unsafe_allow_html=True)
+                st.write(f"**Coach:** {data['coachName']}")
+                
+                # Basis
+                st.markdown("#### Basiself")
+                basis = [p for p in data['roster'] if p['role'] == 'Basis']
+                df_basis = pd.DataFrame(basis)[['shirt', 'name', 'position', 'side']]
+                st.dataframe(df_basis, hide_index=True, use_container_width=True)
+                
+                # Bank
+                st.markdown("#### Wissels")
+                bank = [p for p in data['roster'] if p['role'] == 'Wissel']
+                df_bank = pd.DataFrame(bank)[['shirt', 'name']]
+                st.dataframe(df_bank, hide_index=True, use_container_width=True)
+        
+        with col_h:
+            render_lineup(lineup_home, match_row['home'], team_colors.get(match_row['home'], 'black'))
+            
+        with col_a:
+            render_lineup(lineup_away, match_row['away'], team_colors.get(match_row['away'], 'black'))
+            
+    else:
+        st.info("Geen opstellingsdata beschikbaar voor deze wedstrijd.")
+
+# -----------------------------------------------------------------------------
+# TAB 5: RAW
+# -----------------------------------------------------------------------------
+with tab5:
     cols = ['Volgorde', 'periodId', 'Minuut', 'Team', 'Speler', 'PressingSpeler', 'action', 'result', 'distanceToOpponent', 'pressure', 'phase']
     # Filter only existing columns
     existing_cols = [c for c in cols if c in df_events.columns]
