@@ -1,5 +1,5 @@
 streamlit>=1.37.0
 pandas
+sqlalchemy
 psycopg2-binary
 plotly
-numpy
