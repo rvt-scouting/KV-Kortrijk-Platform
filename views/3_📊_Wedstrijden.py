@@ -325,4 +325,120 @@ with tab2:
         fig.add_shape(type="rect", x0=-52.5, y0=-34, x1=52.5, y1=34, line=dict(color="white"), fillcolor="#4CAF50", layer="below")
         fig.add_shape(type="line", x0=0, y0=-34, x1=0, y1=34, line=dict(color="white"))
         fig.add_shape(type="circle", x0=-9.15, y0=-9.15, x1=9.15, y1=9.15, line=dict(color="white"))
-        fig.add_shape(type="rect", x0=-5
+        fig.add_shape(type="rect", x0=-52.5, y0=-20.16, x1=-36, y1=20.16, line=dict(color="white"))
+        fig.add_shape(type="rect", x0=-52.5, y0=-9.16, x1=-46.5, y1=9.16, line=dict(color="white"))
+        fig.add_shape(type="rect", x0=36, y0=-20.16, x1=52.5, y1=20.16, line=dict(color="white"))
+        fig.add_shape(type="rect", x0=46.5, y0=-9.16, x1=52.5, y1=9.16, line=dict(color="white"))
+
+        # Bepaal groepen
+        if color_mode == "Team":
+            groups = sel_teams
+        else:
+            df_m['result_plot'] = df_m['result_clean'].replace({'': 'NONE', 'nan': 'NONE'}).fillna('NONE')
+            groups = df_m['result_plot'].unique()
+
+        for key in groups:
+            if color_mode == "Team":
+                d = df_m[df_m['Team'] == key]
+                color = team_colors.get(key, '#95a5a6')
+                name_lbl = key
+            else:
+                d = df_m[df_m['result_plot'] == key]
+                color = result_colors.get(key, '#bdc3c7')
+                name_lbl = key
+
+            if d.empty: continue
+
+            # MARKERS
+            fig.add_trace(go.Scatter(
+                x=d['x_start'], y=d['y_start'], 
+                mode='markers', name=name_lbl,
+                marker=dict(color=color, size=8, line=dict(width=1,color='black')),
+                text=d['Speler'] + " (" + d['action'] + ") [" + d['result_clean'] + "]",
+                hovertemplate="%{text}<br>DistOpp: %{customdata[1]}<br>Press: %{customdata[2]}",
+                customdata=d[['TijdString', 'distanceToOpponent', 'pressure']]
+            ))
+            
+            # LIJNEN
+            if show_lines and len(d) < 2000:
+                x_lines = []
+                y_lines = []
+                for _, row in d.iterrows():
+                    if pd.notnull(row['x_end']) and pd.notnull(row['y_end']):
+                        x_lines.extend([row['x_start'], row['x_end'], None])
+                        y_lines.extend([row['y_start'], row['y_end'], None])
+                
+                if x_lines:
+                    fig.add_trace(go.Scatter(
+                        x=x_lines, y=y_lines,
+                        mode='lines',
+                        line=dict(color=color, width=1),
+                        opacity=0.5,
+                        showlegend=False,
+                        hoverinfo='skip'
+                    ))
+
+        fig.update_layout(
+            width=800, height=550, 
+            xaxis=dict(visible=False, range=[-55, 55]), 
+            yaxis=dict(visible=False, range=[-36, 36], scaleanchor="x", scaleratio=1),
+            plot_bgcolor='rgba(0,0,0,0)',
+            margin=dict(l=0, r=0, t=20, b=0)
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("Geen events met deze filters.")
+
+    # 2. RADAR CHART
+    st.divider()
+    st.subheader("🕸️ Spider Diagram: Team Vergelijking")
+    
+    if not df_m.empty and len(sel_acts) > 0:
+        radar_agg = df_m.groupby(['Team', 'action_clean']).size().reset_index(name='Count')
+        
+        fig_rad = go.Figure()
+        for t in sel_teams:
+            vals = []
+            for a in sel_acts:
+                row = radar_agg[(radar_agg['Team'] == t) & (radar_agg['action_clean'] == a)]
+                vals.append(row['Count'].values[0] if not row.empty else 0)
+            
+            if vals:
+                vals_plot = vals + [vals[0]]
+                thetas_plot = sel_acts + [sel_acts[0]]
+                
+                fig_rad.add_trace(go.Scatterpolar(
+                    r=vals_plot, theta=thetas_plot,
+                    fill='toself', name=t,
+                    line_color=team_colors.get(t, '#95a5a6')
+                ))
+        
+        fig_rad.update_layout(polar=dict(radialaxis=dict(visible=True)), showlegend=True, height=500)
+        st.plotly_chart(fig_rad, use_container_width=True)
+
+# -----------------------------------------------------------------------------
+# TAB 3: SPELERS xT
+# -----------------------------------------------------------------------------
+with tab3:
+    st.subheader("🏆 Top xT Generators")
+    st.caption("Som van xT verschil (Delta) per speler.")
+    
+    xt_stats = df_events[df_events['Speler']!='Onbekend'].groupby(['Speler', 'Team'])['xT_Generated_Player'].sum().reset_index()
+    xt_stats = xt_stats.sort_values('xT_Generated_Player', ascending=False).head(20)
+    
+    c1, c2 = st.columns([1, 2])
+    with c1: st.dataframe(xt_stats, use_container_width=True, hide_index=True)
+    with c2:
+        fig_bar = px.bar(xt_stats, x='xT_Generated_Player', y='Speler', color='Team', orientation='h',
+                         color_discrete_map=team_colors, title="Top 20 xT Spelers")
+        fig_bar.update_layout(yaxis={'categoryorder':'total ascending'}, margin=dict(l=150))
+        st.plotly_chart(fig_bar, use_container_width=True)
+
+# -----------------------------------------------------------------------------
+# TAB 4: RAW
+# -----------------------------------------------------------------------------
+with tab4:
+    cols = ['Volgorde', 'periodId', 'Minuut', 'Team', 'Speler', 'action', 'result', 'distanceToOpponent', 'pressure', 'phase']
+    # Filter only existing columns
+    existing_cols = [c for c in cols if c in df_events.columns]
+    st.dataframe(df_events[existing_cols], use_container_width=True)
