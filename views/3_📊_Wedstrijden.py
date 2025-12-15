@@ -48,7 +48,9 @@ if sel_season and sel_comp:
         
     match_opts = {f"{r['home']} - {r['away']} ({r['scheduledDate'].strftime('%d-%m')})": r['id'] for _, r in df_matches.iterrows()}
     sel_match_label = st.sidebar.selectbox("Wedstrijd", list(match_opts.keys()))
-    sel_match_id = str(match_opts[sel_match_label])
+    sel_match_id = str(match_opts[sel_match_label]) # Forceer string
+    
+    # Haal de specifieke rij op voor Home/Away ID's
     match_row = df_matches[df_matches['id'] == sel_match_id].iloc[0]
 else:
     st.stop()
@@ -57,7 +59,7 @@ st.title(f"🏟️ {match_row['home']} vs {match_row['away']}")
 st.caption(f"Datum: {match_row['scheduledDate'].strftime('%d-%m-%Y %H:%M')} | Match ID: {sel_match_id}")
 
 # -----------------------------------------------------------------------------
-# 2. DATA OPHALEN (OPTIMALISATIE: GEEN ZWARE JOINS + TYPE FIX)
+# 2. DATA OPHALEN (OPTIMALISATIE & FIXES)
 # -----------------------------------------------------------------------------
 @st.cache_data
 def get_match_data_optimized(match_id):
@@ -94,11 +96,10 @@ def get_match_data_optimized(match_id):
     if df_ev.empty:
         return pd.DataFrame()
 
-    # STAP 2: Haal squad namen op
-    # FIX: We gebruiken tekst-ids met quotes voor de IN clause
+    # STAP 2: Haal squad namen op (met juiste string formatting)
     squad_ids = df_ev['squadId'].dropna().unique().tolist()
     if squad_ids:
-        # Maak een string lijst: 'id1', 'id2'
+        # Formatteer voor SQL IN clause: 'id1', 'id2'
         s_ids_formatted = ", ".join(f"'{x}'" for x in squad_ids)
         q_squads = f"SELECT id, name FROM public.squads WHERE id IN ({s_ids_formatted})"
              
@@ -113,11 +114,11 @@ def get_match_data_optimized(match_id):
 
     # STAP 3: Haal speler namen op
     player_ids = df_ev['player_id_raw'].dropna().unique().tolist()
-    # Filter: zorg dat het strings zijn en alleen cijfers bevatten (schone data)
+    # Filter: zorg dat het strings zijn en alleen cijfers bevatten
     player_ids = [str(pid) for pid in player_ids if str(pid).isdigit()]
     
     if player_ids:
-        # FIX: Forceer quotes rond elke ID -> ('123', '456')
+        # Formatteer voor SQL IN clause: '123', '456'
         p_ids_formatted = ", ".join(f"'{x}'" for x in player_ids)
         q_players = f"SELECT id, commonname FROM public.players WHERE id IN ({p_ids_formatted})"
             
@@ -133,14 +134,25 @@ def get_match_data_optimized(match_id):
 
     return df_ev
 
+with st.spinner("Event data analyseren..."):
+    df_events = get_match_data_optimized(sel_match_id)
+
+if df_events.empty:
+    st.warning(f"⚠️ Geen events gevonden (ID: {sel_match_id}).")
+    st.stop()
+
 # -----------------------------------------------------------------------------
 # 3. STATS & SCOREBORD
 # -----------------------------------------------------------------------------
 tab1, tab2, tab3 = st.tabs(["📊 Stats & Tijdlijn", "📍 Pitch Map (Veld)", "📋 Data Lijst"])
 
 with tab1:
-    home_id = match_row['homeSquadId']
-    away_id = match_row['awaySquadId']
+    # DEFINIEER ID's (Hier ging het mis)
+    home_id = str(match_row['homeSquadId'])
+    away_id = str(match_row['awaySquadId'])
+
+    # Zorg dat de squadId in dataframe ook string is voor vergelijking
+    df_events['squadId'] = df_events['squadId'].astype(str)
 
     goals_home = df_events[(df_events['squadId'] == home_id) & (df_events['action'] == 'Goal') & (df_events['result'] == 'Success')]
     own_goals_away = df_events[(df_events['squadId'] == away_id) & (df_events['action'] == 'Own Goal') & (df_events['result'] == 'Success')]
