@@ -143,11 +143,12 @@ if selected_list_id:
                     else:
                         st.warning("Selecteer een speler of vul een naam in.")
 
-    # =========================================================================
+# =========================================================================
     # TAB 2: LIJST BEKIJKEN
     # =========================================================================
     with tab2:
         # Haal entries op
+        # FIX: We gebruiken CAST(... AS TEXT) in de JOIN om de integer/text mismatch op te lossen
         q_entries = """
             SELECT 
                 e.id,
@@ -159,7 +160,7 @@ if selected_list_id:
                 e.added_by as "Door",
                 e.added_at as "Datum"
             FROM scouting.shortlist_entries e
-            LEFT JOIN public.players p ON e.player_id = p.id
+            LEFT JOIN public.players p ON CAST(e.player_id AS TEXT) = CAST(p.id AS TEXT)
             LEFT JOIN public.squads sq ON p."currentSquadId" = sq.id
             WHERE e.shortlist_id = %s
             ORDER BY 
