@@ -2,21 +2,22 @@ import streamlit as st
 import pandas as pd
 from sqlalchemy import create_engine
 
-# 1. Database Connectie
+# 1. Database Connectie via Secrets
 @st.cache_resource
 def get_db_connection():
-    # Vul hier jouw gegevens in
-    db_user = 'jouw_username' 
-    db_pass = 'jouw_wachtwoord'
-    db_host = 'localhost' # of IP van je server
-    db_port = '5432'
-    db_name = 'jouw_database_naam'
+    # We halen de config op uit de secrets file
+    # Zorg dat je sectie in secrets.toml [postgres] heet
+    db_config = st.secrets["postgres"]
     
-    # Let op: als je database buiten docker draait en je app lokaal, gebruik localhost. 
-    # Als beide in docker zitten, gebruik de container naam.
+    db_user = db_config["user"]
+    db_pass = db_config["password"]
+    db_host = db_config["host"]
+    db_port = db_config["port"]
+    db_name = db_config["dbname"]
+    
     return create_engine(f'postgresql+psycopg2://{db_user}:{db_pass}@{db_host}:{db_port}/{db_name}')
 
-# 2. Query uitvoeren
+# 2. Query functie (ongewijzigd, maar gebruikt nu de nieuwe connectie)
 @st.cache_data(ttl=600)
 def run_query(query, params=None):
     engine = get_db_connection()
@@ -26,24 +27,23 @@ def run_query(query, params=None):
         st.error(f"SQL Fout: {e}")
         return pd.DataFrame()
 
-# 3. Sidebar Filters (Seizoen -> Competitie)
+# 3. Sidebar Filters (ongewijzigd)
 def show_sidebar_filters():
     st.sidebar.header("🌍 Filters")
     
-    # A. Haal seizoenen op
+    # Seizoenen ophalen
     q_seasons = 'SELECT DISTINCT "season" FROM public.iterations ORDER BY "season" DESC'
     df_seasons = run_query(q_seasons)
     
     if df_seasons.empty:
-        st.sidebar.warning("Geen data gevonden in public.iterations")
+        st.sidebar.warning("Geen seizoenen gevonden.")
         return None, None
 
-    # Selectbox Seizoen
+    # Seizoen kiezen
     seasons = df_seasons['season'].tolist()
     selected_season = st.sidebar.selectbox("Kies Seizoen", seasons)
     
-    # B. Haal competities op basis van seizoen
-    # We halen zowel de naam als het ID op, want het ID hebben we nodig voor de koppeling
+    # Competitie ophalen bij seizoen
     q_comps = """
         SELECT DISTINCT "competitionName", "id" 
         FROM public.iterations 
@@ -53,16 +53,14 @@ def show_sidebar_filters():
     df_comps = run_query(q_comps, params=(selected_season,))
     
     if df_comps.empty:
-        st.sidebar.warning("Geen competities gevonden voor dit seizoen.")
+        st.sidebar.warning("Geen competities gevonden.")
         return selected_season, None
         
-    # Dictionary voor vertaling Naam -> ID
+    # Mapping voor dropdown (Naam -> ID)
     comp_map = dict(zip(df_comps['competitionName'], df_comps['id']))
-    
-    # Selectbox Competitie
     selected_comp_name = st.sidebar.selectbox("Kies Competitie", list(comp_map.keys()))
     
-    # Het ID teruggeven voor gebruik in queries
+    # ID teruggeven
     selected_iteration_id = comp_map[selected_comp_name]
     
     return selected_season, selected_iteration_id
