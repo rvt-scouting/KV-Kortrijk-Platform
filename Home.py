@@ -118,7 +118,7 @@ else:
     pg_test = st.Page(test_page, title="Test Pagina", icon="🔧")
     pages_dict["Algemeen"].append(pg_test)
     # --- D. START NAVIGATIE ---
-    pg = st.navigation(pages_dict)
+    pg = st.navigation(pages_dict, position="sidebar")
     pg.run()
     
 # --- E. SIDEBAR FOOTER (DEBUG VERSIE) ---
