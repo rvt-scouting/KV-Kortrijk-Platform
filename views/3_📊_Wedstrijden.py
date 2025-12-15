@@ -57,7 +57,7 @@ st.title(f"🏟️ {match_row['home']} vs {match_row['away']}")
 st.caption(f"Datum: {match_row['scheduledDate'].strftime('%d-%m-%Y %H:%M')} | Match ID: {sel_match_id}")
 
 # -----------------------------------------------------------------------------
-# 2. DATA OPHALEN (OPTIMALISATIE: GEEN ZWARE JOINS)
+# 2. DATA OPHALEN (OPTIMALISATIE: GEEN ZWARE JOINS + TYPE FIX)
 # -----------------------------------------------------------------------------
 @st.cache_data
 def get_match_data_optimized(match_id):
@@ -89,62 +89,49 @@ def get_match_data_optimized(match_id):
         WHERE e."matchId" = %s 
         ORDER BY e.index ASC
     """
-    # Let op: we gebruiken matchId direct (string) om index te raken
     df_ev = run_query(q_events, (match_id,))
     
     if df_ev.empty:
         return pd.DataFrame()
 
-    # STAP 2: Haal squad namen op (kleine query)
-    squad_ids = df_ev['squadId'].unique().tolist()
+    # STAP 2: Haal squad namen op
+    # FIX: We gebruiken tekst-ids met quotes voor de IN clause
+    squad_ids = df_ev['squadId'].dropna().unique().tolist()
     if squad_ids:
-        # Formatteer voor SQL IN clause
-        s_ids_tuple = tuple(str(x) for x in squad_ids)
-        # Fix voor als er maar 1 team is (tuple bug in python)
-        if len(squad_ids) == 1: 
-             q_squads = f"SELECT id, name FROM public.squads WHERE id = '{squad_ids[0]}'"
-        else:
-             q_squads = f"SELECT id, name FROM public.squads WHERE id IN {s_ids_tuple}"
+        # Maak een string lijst: 'id1', 'id2'
+        s_ids_formatted = ", ".join(f"'{x}'" for x in squad_ids)
+        q_squads = f"SELECT id, name FROM public.squads WHERE id IN ({s_ids_formatted})"
              
         df_sq = run_query(q_squads)
-        # Maak dictionary: id -> naam
-        squad_map = dict(zip(df_sq['id'].astype(str), df_sq['name']))
-        # Map de namen
-        df_ev['Team'] = df_ev['squadId'].astype(str).map(squad_map).fillna('Onbekend')
+        if not df_sq.empty:
+            squad_map = dict(zip(df_sq['id'].astype(str), df_sq['name']))
+            df_ev['Team'] = df_ev['squadId'].astype(str).map(squad_map).fillna('Onbekend')
+        else:
+            df_ev['Team'] = 'Onbekend'
     else:
         df_ev['Team'] = 'Onbekend'
 
-    # STAP 3: Haal speler namen op (alleen voor de spelers in deze match)
+    # STAP 3: Haal speler namen op
     player_ids = df_ev['player_id_raw'].dropna().unique().tolist()
-    
-    # Filter non-numeric IDs eruit voor de zekerheid
-    player_ids = [pid for pid in player_ids if str(pid).isdigit()]
+    # Filter: zorg dat het strings zijn en alleen cijfers bevatten (schone data)
+    player_ids = [str(pid) for pid in player_ids if str(pid).isdigit()]
     
     if player_ids:
-        p_ids_tuple = tuple(int(x) for x in player_ids)
-        if len(player_ids) == 1:
-            q_players = f"SELECT id, commonname FROM public.players WHERE id = {player_ids[0]}"
-        else:
-            q_players = f"SELECT id, commonname FROM public.players WHERE id IN {p_ids_tuple}"
+        # FIX: Forceer quotes rond elke ID -> ('123', '456')
+        p_ids_formatted = ", ".join(f"'{x}'" for x in player_ids)
+        q_players = f"SELECT id, commonname FROM public.players WHERE id IN ({p_ids_formatted})"
             
         df_pl = run_query(q_players)
         
-        # Maak dictionary: id (string) -> naam
-        player_map = dict(zip(df_pl['id'].astype(str), df_pl['commonname']))
-        
-        # Map de namen
-        df_ev['Speler'] = df_ev['player_id_raw'].astype(str).map(player_map).fillna('Onbekend')
+        if not df_pl.empty:
+            player_map = dict(zip(df_pl['id'].astype(str), df_pl['commonname']))
+            df_ev['Speler'] = df_ev['player_id_raw'].astype(str).map(player_map).fillna('Onbekend')
+        else:
+            df_ev['Speler'] = 'Onbekend'
     else:
         df_ev['Speler'] = 'Onbekend'
 
     return df_ev
-
-with st.spinner("Event data analyseren (Geoptimaliseerd)..."):
-    df_events = get_match_data_optimized(sel_match_id)
-
-if df_events.empty:
-    st.warning(f"⚠️ Geen events gevonden (ID: {sel_match_id}).")
-    st.stop()
 
 # -----------------------------------------------------------------------------
 # 3. STATS & SCOREBORD
