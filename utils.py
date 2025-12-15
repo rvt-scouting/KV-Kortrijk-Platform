@@ -2,110 +2,83 @@ import streamlit as st
 import pandas as pd
 from sqlalchemy import create_engine
 
-# --- DATABASE FUNCTIES ---
-
-# 1. Database Connectie via Secrets
+# -----------------------------------------------------------------------------
+# 1. DATABASE CONNECTIE (Via Secrets)
+# -----------------------------------------------------------------------------
 @st.cache_resource
 def get_db_connection():
-    # Zorg dat je secrets.toml correct is ingevuld!
     if "postgres" not in st.secrets:
-        st.error("Geen [postgres] sectie gevonden in .streamlit/secrets.toml")
+        st.error("Geen [postgres] sectie in .streamlit/secrets.toml")
         return None
 
-    db_config = st.secrets["postgres"]
-    
+    conf = st.secrets["postgres"]
     try:
-        return create_engine(f'postgresql+psycopg2://{db_config["user"]}:{db_config["password"]}@{db_config["host"]}:{db_config["port"]}/{db_config["dbname"]}')
+        # Let op: f-string veiligheid is hier prima voor interne config
+        url = f"postgresql+psycopg2://{conf['user']}:{conf['password']}@{conf['host']}:{conf['port']}/{conf['dbname']}"
+        return create_engine(url)
     except Exception as e:
-        st.error(f"Fout bij maken connectie string: {e}")
+        st.error(f"DB Connectie Error: {e}")
         return None
 
-# 2. Query uitvoeren
 @st.cache_data(ttl=600)
 def run_query(query, params=None):
     engine = get_db_connection()
-    if engine is None:
-        return pd.DataFrame()
-        
+    if not engine: return pd.DataFrame()
     try:
         return pd.read_sql(query, engine, params=params)
     except Exception as e:
-        st.error(f"SQL Fout: {e}")
+        st.error(f"SQL Error: {e}")
         return pd.DataFrame()
 
-# --- FILTER FUNCTIES ---
+# -----------------------------------------------------------------------------
+# 2. LOGIN FUNCTIE (Speciaal voor jouw Home.py)
+# -----------------------------------------------------------------------------
+def check_login(email, password):
+    """
+    Wordt aangeroepen door Home.py als: check_login(email, pwd)
+    Moet een DICTIONARY teruggeven als succesvol, anders None.
+    """
+    # Haal het master wachtwoord uit secrets
+    try:
+        correct_pass = st.secrets["login"]["password"]
+    except KeyError:
+        st.error("Voeg [login] password = '...' toe aan secrets.toml")
+        return None
 
+    if password == correct_pass:
+        # HIERONDER: Simuleer de user info die jouw Home.py nodig heeft.
+        # Later kun je dit vervangen door een query naar je 'users' tabel.
+        
+        # Voorbeeld: Als email 'scout@kvk.be' is, geef niveau 1, anders niveau 3
+        niveau = 1 if "scout" in email else 3
+        
+        return {
+            "naam": email.split('@')[0], # Pakt het stukje voor de @ als naam
+            "email": email,
+            "toegangsniveau": niveau 
+        }
+    
+    return None
+
+# -----------------------------------------------------------------------------
+# 3. FILTERS VOOR DE PAGINA'S
+# -----------------------------------------------------------------------------
 def show_sidebar_filters():
     st.sidebar.header("🌍 Filters")
     
-    # Seizoenen ophalen
-    q_seasons = 'SELECT DISTINCT "season" FROM public.iterations ORDER BY "season" DESC'
-    df_seasons = run_query(q_seasons)
-    
-    if df_seasons.empty:
-        st.sidebar.warning("Geen seizoenen gevonden.")
-        return None, None
+    # Haal seizoenen op
+    df_seasons = run_query('SELECT DISTINCT "season" FROM public.iterations ORDER BY "season" DESC')
+    if df_seasons.empty: return None, None
 
-    seasons = df_seasons['season'].tolist()
-    selected_season = st.sidebar.selectbox("Kies Seizoen", seasons)
+    selected_season = st.sidebar.selectbox("Seizoen", df_seasons['season'].tolist())
     
-    q_comps = """
-        SELECT DISTINCT "competitionName", "id" 
-        FROM public.iterations 
-        WHERE "season" = %s
-        ORDER BY "competitionName"
-    """
+    # Haal competities op
+    q_comps = 'SELECT DISTINCT "competitionName", "id" FROM public.iterations WHERE "season" = %s'
     df_comps = run_query(q_comps, params=(selected_season,))
     
-    if df_comps.empty:
-        st.sidebar.warning("Geen competities gevonden.")
-        return selected_season, None
+    if df_comps.empty: return selected_season, None
         
     comp_map = dict(zip(df_comps['competitionName'], df_comps['id']))
-    selected_comp_name = st.sidebar.selectbox("Kies Competitie", list(comp_map.keys()))
-    selected_iteration_id = comp_map[selected_comp_name]
+    selected_comp = st.sidebar.selectbox("Competitie", list(comp_map.keys()))
     
-    return selected_season, selected_iteration_id
-
-# --- LOGIN FUNCTIE (DEZE MISTE JE) ---
-
-def check_login():
-    """
-    Zorgt voor een simpele wachtwoordbeveiliging.
-    Zet je wachtwoord in secrets.toml onder [login] password = "..."
-    of pas het hieronder hardcoded aan.
-    """
-    if "logged_in" not in st.session_state:
-        st.session_state["logged_in"] = False
-
-    if st.session_state["logged_in"]:
-        # Voeg eventueel een uitlogknop toe in de sidebar
-        if st.sidebar.button("Uitloggen"):
-            st.session_state["logged_in"] = False
-            st.rerun()
-        return True
-
-    # Als niet ingelogd, toon login formulier
-    st.sidebar.header("🔒 Login")
-    password_input = st.sidebar.text_input("Wachtwoord", type="password")
-    
-    if st.sidebar.button("Inloggen"):
-        # OPTIE A: Haal wachtwoord uit secrets (Beste manier)
-        # Zorg dat in secrets.toml staat:
-        # [login]
-        # password = "JeWachtwoord"
-        
-        secret_pass = st.secrets.get("login", {}).get("password")
-        
-        # OPTIE B: Hardcoded (voor nu even snel testen, haal dit later weg)
-        # secret_pass = "admin123" 
-
-        if secret_pass and password_input == secret_pass:
-            st.session_state["logged_in"] = True
-            st.rerun()
-        elif not secret_pass:
-            st.error("Geen wachtwoord ingesteld in secrets.toml!")
-        else:
-            st.error("Onjuist wachtwoord")
-            
-    return False
+    return selected_season, comp_map[selected_comp]
