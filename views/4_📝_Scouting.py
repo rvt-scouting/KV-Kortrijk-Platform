@@ -138,17 +138,21 @@ st.sidebar.write(f"👤 **Scout:** {current_scout_name}")
 # 3. SPELERS OPHALEN UIT JSON (public.match_details_full)
 # -----------------------------------------------------------------------------
 # We halen de JSON kolommen op
+# AANGEPAST: We gebruiken nu "id" in plaats van "matchId"
 json_query = """
     SELECT "squadHome", "squadAway" 
     FROM public.match_details_full 
-    WHERE "matchId" = %s
+    WHERE "id" = %s
 """
 try:
-    df_json = run_query(json_query, params=(selected_match_id,))
-except Exception as e: st.error(f"Fout bij JSON data: {e}"); st.stop()
+    # We sturen de ID als string mee, want match IDs zijn vaak strings/text in deze DB
+    df_json = run_query(json_query, params=(str(selected_match_id),))
+except Exception as e: 
+    st.error(f"Fout bij ophalen JSON data: {e}")
+    st.stop()
 
 if df_json.empty:
-    st.warning("Geen detail data beschikbaar voor deze match.")
+    st.warning(f"Geen detail data gevonden in match_details_full voor Match ID: {selected_match_id}.")
     st.stop()
 
 # Functie om JSON te parsen en lijst van dicts te maken
