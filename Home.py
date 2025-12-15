@@ -43,30 +43,26 @@ def logout():
 # -----------------------------------------------------------------------------
 def welcome():
     st.title(f"Welkom {st.session_state.user_info.get('naam')}")
+    st.info(f"Je bent ingelogd als: {st.session_state.user_info.get('rol')} (Niveau {st.session_state.user_info.get('toegangsniveau')})")
     st.write("Gebruik het menu links om te navigeren.")
 
-def test_page_func():
-    st.title("🛠️ Systeem Info")
-    st.write(f"Ingelogd als: {st.session_state.user_info.get('naam')} (Rol: {st.session_state.user_info.get('rol')})")
-
-# Basis
+# Basis Pagina's
 pg_home = st.Page(welcome, title="Home", icon="🏠")
-pg_test = st.Page(test_page_func, title="Mijn Profiel", icon="👤")
 
-# Scouting Modules
-pg_scout = st.Page("views/4_📝_Scouting.py", title="Scouting Input", icon="📝") 
-pg_disc = st.Page("views/5_🔎_Discover.py", title="Discover", icon="🔎")
-pg_offer = st.Page("views/6_📥_Aangeboden.py", title="Aangeboden Spelers", icon="📥")
-pg_shortlists = st.Page("views/9_🎯_Shortlists.py", title="Shortlists Manager", icon="🎯") # NIEUW
-pg_dashboard = st.Page("views/7_📊_Scouting_Overzicht.py", title="Scouting Dashboard", icon="📊")
+# Niveau 1: Scouts
+pg_scout = st.Page("views/4_📝_Scouting.py", title="Scout Rapport Maken", icon="📝") 
+pg_shortlists = st.Page("views/9_🎯_Shortlists.py", title="Shortlists Aanvullen", icon="🎯")
 
-# Data Modules
-pg_match = st.Page("views/3_📊_Wedstrijden.py", title="Wedstrijden Analyse", icon="📊")
-pg_coach = st.Page("views/2_👔_Coaches.py", title="Coaches", icon="👔")
-pg_player = st.Page("views/1_⚽_Spelers_en_Teams.py", title="Spelers & Teams", icon="⚽")
+# Niveau 2: Coaches
+pg_match = st.Page("views/3_📊_Wedstrijden.py", title="Wedstrijd Analyse", icon="📊")
 
-# Admin Module
-pg_admin = st.Page("views/8_⚙️_Admin.py", title="Admin Panel", icon="⚙️")
+# Niveau 3: Management / Admin (Extra pagina's bovenop de rest)
+pg_dashboard = st.Page("views/7_📊_Scouting_Overzicht.py", title="Scouting Dashboard", icon="📈")
+pg_offer = st.Page("views/6_📥_Aangeboden.py", title="Transfermarkt (Aangeboden)", icon="📥")
+pg_disc = st.Page("views/5_🔎_Discover.py", title="Data Discover", icon="🔎")
+pg_coach = st.Page("views/2_👔_Coaches.py", title="Coach Profielen", icon="👔")
+pg_player = st.Page("views/1_⚽_Spelers_en_Teams.py", title="Diepte Analyse", icon="⚽")
+pg_admin = st.Page("views/8_⚙️_Admin.py", title="Admin Beheer", icon="⚙️")
 
 # -----------------------------------------------------------------------------
 # 4. NAVIGATIE BOUWER
@@ -83,29 +79,27 @@ else:
     # Bouw de dictionary
     pages = {}
     
-    # GROEP 1: ALGEMEEN
-    pages["Algemeen"] = [pg_home, pg_test]
+    # 1. Home is voor iedereen zichtbaar
+    pages["Algemeen"] = [pg_home]
 
-    # GROEP 2: MODULES (Op basis van rechten)
-    modules = []
+    # 2. Logica per Rol
     
-    # Level 1: Scouts (Input & Lijsten)
-    if lvl >= 1: 
-        modules.extend([pg_scout, pg_offer, pg_shortlists, pg_dashboard, pg_disc])
-        
-    # Level 2: Coaches/Managers (Data Analyse)
-    if lvl >= 2: 
-        modules.extend([pg_match, pg_coach])
-        
-    # Level 3: Directie/Head of Data (Diepe data)
-    if lvl >= 3: 
-        modules.extend([pg_player])
+    # --- NIVEAU 1: SCOUTS ---
+    # "Scout rapporten maken en shortlists aanvullen. Enkel eigen rapporten."
+    # (Doordat we Dashboard weglaten, zien ze elkaars rapporten niet)
+    if lvl == 1:
+        pages["Scouting"] = [pg_scout, pg_shortlists]
 
-    if modules:
-        pages["Scouting App"] = modules
+    # --- NIVEAU 2: COACHES ---
+    # "Enkel wedstrijden.py bekijken"
+    elif lvl == 2:
+        pages["Performance"] = [pg_match]
 
-    # GROEP 3: ADMIN (Alleen Level 3)
-    if lvl >= 3:
+    # --- NIVEAU 3: MANAGEMENT / ADMIN ---
+    # "Toegang tot alles"
+    elif lvl >= 3:
+        pages["Scouting & Markt"] = [pg_dashboard, pg_scout, pg_shortlists, pg_offer]
+        pages["Data Analyse"] = [pg_match, pg_player, pg_disc, pg_coach]
         pages["Beheer"] = [pg_admin]
 
     # START DE NAVIGATIE
