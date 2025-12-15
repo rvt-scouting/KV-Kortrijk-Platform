@@ -5,7 +5,7 @@ import numpy as np
 # IMPORT DE FUNCTIES UIT UTILS.PY
 from utils import run_query, get_config_for_position, POSITION_METRICS, POSITION_KPIS
 
-#st.set_page_config(page_title="Spelers & Teams", page_icon="⚽", layout="wide")
+# st.set_page_config(page_title="Spelers & Teams", page_icon="⚽", layout="wide")
 
 # --- NAVIGATIE LOGICA ---
 if "pending_nav" in st.session_state:
@@ -87,7 +87,7 @@ if analysis_mode == "Spelers":
     except Exception as e: st.error("Fout bij ophalen spelers."); st.code(e); st.stop()
 
     # =========================================================================
-    # NIEUW: CHECK OF SPELER IS AANGEBODEN (SCOUTING)
+    # CHECK OF SPELER IS AANGEBODEN (SCOUTING)
     # =========================================================================
     check_offer_q = """
         SELECT status, makelaar, vraagprijs, opmerkingen 
@@ -99,14 +99,12 @@ if analysis_mode == "Spelers":
 
     if not df_offer.empty:
         offer_row = df_offer.iloc[0]
-        # Bepaal kleur op basis van status
-        status_color = "#f39c12" # Oranje (default)
-        if offer_row['status'] == 'Interessant': status_color = "#27ae60" # Groen
-        if offer_row['status'] == 'Afgekeurd': status_color = "#c0392b" # Rood
+        status_color = "#f39c12" 
+        if offer_row['status'] == 'Interessant': status_color = "#27ae60" 
+        if offer_row['status'] == 'Afgekeurd': status_color = "#c0392b" 
         
         price_display = f"€ {offer_row['vraagprijs']:,.0f}" if offer_row['vraagprijs'] else "Onbekend"
         
-        # We gebruiken HTML voor een mooi kader
         st.markdown(f"""
             <div style="padding: 15px; background-color: {status_color}15; border: 2px solid {status_color}; border-radius: 8px; margin-bottom: 25px;">
                 <h4 style="color: {status_color}; margin:0;">📥 Aangeboden Speler</h4>
@@ -118,8 +116,7 @@ if analysis_mode == "Spelers":
                 <p style="margin: 5px 0 0 0; font-style: italic; font-size: 14px; color: #555;">"{offer_row['opmerkingen']}"</p>
             </div>
         """, unsafe_allow_html=True)
-    # =========================================================================
-
+    
     # 2. DATA OPHALEN
     st.divider()
     score_query = """
@@ -220,8 +217,70 @@ if analysis_mode == "Spelers":
                     if not df_k2.empty: st.dataframe(df_k2.style.applymap(highlight_high_scores, subset=['Score']), use_container_width=True, hide_index=True)
             else: st.info("Geen KPIs gevonden.")
 
-            # RAPPORTEN
-            st.markdown("---"); st.subheader("📑 Data Scout Rapporten")
+            # =========================================================
+            # INTERNE SCOUTING RAPPORTEN (NIEUW)
+            # =========================================================
+            st.markdown("---")
+            st.subheader("🕵️ Scouting Rapporten (Intern)")
+            
+            scouting_query = """
+                SELECT 
+                    s.naam as "Scout",
+                    r.aangemaakt_op as "Datum",
+                    r.positie_gespeeld as "Positie",
+                    r.profiel_code as "Profiel",
+                    r.beoordeling as "Rating",
+                    r.advies as "Advies",
+                    r.rapport_tekst,
+                    r.gouden_buzzer,
+                    COALESCE(m.id::text, r.custom_wedstrijd_naam) as "Wedstrijd_Ref"
+                FROM scouting.rapporten r
+                LEFT JOIN scouting.scouts s ON r.scout_id = s.id
+                LEFT JOIN public.matches m ON r.wedstrijd_id = m.id
+                WHERE r.speler_id = %s
+                ORDER BY r.aangemaakt_op DESC
+            """
+            try:
+                df_internal = run_query(scouting_query, params=(str(final_player_id),))
+                
+                if not df_internal.empty:
+                    # 1. Tabelweergave (Selecteer kolommen voor overzicht)
+                    display_cols = ["Datum", "Scout", "Positie", "Profiel", "Rating", "Advies"]
+                    
+                    # Kopie voor weergave
+                    df_disp = df_internal.copy()
+                    df_disp['Datum'] = pd.to_datetime(df_disp['Datum']).dt.strftime('%d-%m-%Y')
+                    
+                    # Highlight Gouden Buzzer in de tabel
+                    def highlight_rows(row):
+                        return ['background-color: #fff9c4'] * len(row) if row.name in df_internal[df_internal['gouden_buzzer']==True].index else [''] * len(row)
+
+                    st.dataframe(
+                        df_disp[display_cols], 
+                        use_container_width=True, 
+                        hide_index=True
+                    )
+                    
+                    # 2. Uitklapbaar menu voor teksten
+                    with st.expander("📖 Lees volledige rapport teksten"):
+                        for idx, row in df_internal.iterrows():
+                            date_str = pd.to_datetime(row['Datum']).strftime('%d-%m-%Y')
+                            icon = "🏆" if row['gouden_buzzer'] else "📝"
+                            rating_str = f"({row['Rating']}/10)" if row['Rating'] else ""
+                            
+                            st.markdown(f"**{icon} {date_str} - {row['Scout']} {rating_str}**")
+                            if row['rapport_tekst']:
+                                st.info(row['rapport_tekst'])
+                            else:
+                                st.caption("Geen tekst ingevoerd.")
+                            st.markdown("---")
+                else:
+                    st.info("Nog geen interne scouting rapporten voor deze speler.")
+            except Exception as e:
+                st.error(f"Fout bij laden interne rapporten: {e}")
+
+            # DATA SCOUT RAPPORTEN (BESTAAND)
+            st.markdown("---"); st.subheader("📑 Data Scout Rapporten (Extern)")
             reports_query = """
                 SELECT m."scheduledDate" as "Datum", sq_h.name as "Thuisploeg", sq_a.name as "Uitploeg", r.position as "Positie", r.label as "Verdict"
                 FROM analysis.scouting_reports r JOIN public.matches m ON r."matchId" = m.id LEFT JOIN public.squads sq_h ON m."homeSquadId" = sq_h.id LEFT JOIN public.squads sq_a ON m."awaySquadId" = sq_a.id
@@ -236,11 +295,11 @@ if analysis_mode == "Spelers":
                         vc = df_rep['Verdict'].value_counts().reset_index(); vc.columns=['Verdict','Aantal']
                         fig = px.pie(vc, values='Aantal', names='Verdict', hole=0.4, color_discrete_sequence=['#d71920', '#bdc3c7', '#ecf0f1'])
                         st.plotly_chart(fig, use_container_width=True)
-                else: st.info("Geen rapporten.")
+                else: st.info("Geen externe rapporten.")
             except: st.error("Fout bij laden rapporten.")
 
             # =========================================================
-            # 7. VERGELIJKBARE SPELERS (GEOPTIMALISEERD & GEFILTERD)
+            # 7. VERGELIJKBARE SPELERS
             # =========================================================
             st.markdown("---")
             st.subheader("👯 Vergelijkbare Spelers (Op basis van Score & Stijl)")
@@ -262,7 +321,6 @@ if analysis_mode == "Spelers":
                 with st.expander(f"Toon top 10 spelers die lijken op {selected_player_name}", expanded=False):
                     cols_str = ", ".join([f'a.{c}' for c in db_cols])
                     
-                    # PERFORMANCE FILTER: AND i.season IN ('25/26', '2025')
                     sim_query = f"""
                         SELECT p.id as "playerId", p.commonname as "Naam", sq.name as "Team", i.season as "Seizoen", i."competitionName" as "Competitie", {cols_str}
                         FROM analysis.final_impect_scores a
@@ -284,7 +342,6 @@ if analysis_mode == "Spelers":
                                 target_avg = target_vec.mean()
                                 others_avg = df_all_p[db_cols].mean(axis=1)
                                 
-                                # Niveau Filter
                                 mask = (others_avg >= (target_avg - 15)) & (others_avg <= (target_avg + 15))
                                 df_filtered = df_all_p[mask]
                                 
