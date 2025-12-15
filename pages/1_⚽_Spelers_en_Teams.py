@@ -398,6 +398,3 @@ elif analysis_mode == "Teams":
             else: st.error("Team details fout.")
     except Exception as e: st.error("Teamlijst fout."); st.code(e)
 
-elif analysis_mode == "Coaches":
-    st.header("👔 Coach Analyse")
-    st.warning("🚧 Work in Progress")
