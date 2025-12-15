@@ -117,20 +117,17 @@ def get_config_for_position(db_position, config_dict):
 # -----------------------------------------------------------------------------
 def check_login(email, password):
     """
-    Checkt of gebruiker bestaat in scouting.scouts en of wachtwoord klopt.
-    Geeft de gebruikersinfo terug (dict) of None.
+    Checkt of gebruiker bestaat in scouting.gebruikers
     """
-    # Let op: In productie moet je wachtwoorden HASHEN (met bcrypt). 
-    # Nu doen we even plain-text vergelijking omdat het zo in je DB staat.
+    # We kijken nu in de NIEUWE tabel
     query = """
-        SELECT id, naam, rol_in_club, toegangsniveau 
-        FROM scouting.scouts 
+        SELECT id, naam, rol, toegangsniveau 
+        FROM scouting.gebruikers 
         WHERE email = %s AND wachtwoord = %s AND actief = TRUE
     """
     df = run_query(query, params=(email, password))
     
     if not df.empty:
-        # Zet de eerste rij om naar een dictionary (gemakkelijk te gebruiken)
         return df.iloc[0].to_dict()
     else:
         return None
