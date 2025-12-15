@@ -85,9 +85,11 @@ def get_match_data_optimized(match_id):
             (e.player ->> 'id') as player_id_raw,
             (e."gameTime" ->> 'gameTime') as "TijdString",
             
+            -- Extra Kolommen
             e."distanceToOpponent",
             e."phase",
             e."pressure",
+            e."periodId",  -- NIEUW: Voor filter op helft
             
             CAST(e."start" -> 'coordinates' ->> 'x' AS FLOAT) as x_start,
             CAST(e."start" -> 'coordinates' ->> 'y' AS FLOAT) as y_start,
@@ -110,7 +112,6 @@ def get_match_data_optimized(match_id):
     squad_map = {}
     if squad_ids:
         s_ids_formatted = ", ".join(f"'{x}'" for x in squad_ids)
-        # Check if list is not empty before query
         if s_ids_formatted:
             df_sq = run_query(f"SELECT id, name FROM public.squads WHERE id IN ({s_ids_formatted})")
             if not df_sq.empty:
@@ -254,47 +255,64 @@ with tab1:
 # -----------------------------------------------------------------------------
 with tab2:
     st.subheader("📍 Event Map Analysis")
-    c1, c2, c3 = st.columns(3)
-    teams = df_events['Team'].unique(); sel_teams = c1.multiselect("Teams", teams, default=teams)
-    acts = df_events['action_clean'].unique(); sel_acts = c2.multiselect("Acties", acts, default=[x for x in ['SHOT','GOAL'] if x in acts])
-    plys = df_events['Speler'].unique(); sel_plys = c3.multiselect("Speler (Map filter)", plys)
     
-    # EXTRA FILTERS
+    # Gebruik kolommen voor filters. BELANGRIJK: gebruik 'key' parameters om reset te voorkomen.
+    c1, c2, c3, c4 = st.columns(4)
+    
+    teams = df_events['Team'].unique()
+    sel_teams = c1.multiselect("Teams", teams, default=teams, key="pm_teams")
+    
+    acts = df_events['action_clean'].unique()
+    def_acts = [x for x in ['SHOT','GOAL'] if x in acts]
+    sel_acts = c2.multiselect("Acties", acts, default=def_acts, key="pm_acts")
+    
+    # PERIODE FILTER (NIEUW)
+    periods = sorted(df_events['periodId'].astype(str).unique())
+    sel_period = c3.multiselect("Periode / Helft", periods, default=periods, key="pm_period")
+    
+    plys = df_events['Speler'].unique()
+    sel_plys = c4.multiselect("Speler", plys, key="pm_plys")
+    
+    # EXTRA FILTERS (Rij 2)
     st.markdown("### Extra Filters & Opties")
     f_c1, f_c2, f_c3 = st.columns(3)
     
-    # Dropdown logica (veilig sorteren)
+    # Distance Filter
     try:
         dist_vals = df_events['distanceToOpponent'].dropna().unique()
-        # Sorteer numeriek als mogelijk
         dist_opts = sorted(dist_vals, key=lambda x: float(x))
     except:
         dist_opts = sorted(df_events['distanceToOpponent'].dropna().astype(str).unique())
+    sel_dist = f_c1.multiselect("Afstand tot Opponent", dist_opts, key="pm_dist")
     
-    sel_dist = f_c1.multiselect("Afstand tot Opponent", dist_opts)
-    
+    # Pressure Filter
     try:
         pres_vals = df_events['pressure'].dropna().unique()
         pres_opts = sorted(pres_vals, key=lambda x: float(x))
     except:
         pres_opts = sorted(df_events['pressure'].dropna().astype(str).unique())
+    sel_pres = f_c2.multiselect("Pressure", pres_opts, key="pm_pres")
     
-    sel_pres = f_c2.multiselect("Pressure", pres_opts)
-    
+    # Phase Filter
     phases = sorted(df_events['phase'].dropna().astype(str).unique().tolist())
-    sel_phase = f_c3.multiselect("Spelfase", phases)
+    sel_phase = f_c3.multiselect("Spelfase", phases, key="pm_phase")
     
     # VISUALISATIE OPTIES
     v_c1, v_c2 = st.columns(2)
-    show_lines = v_c1.checkbox("Toon Pass/Looplijnen (Start -> Eind)", value=False)
-    color_mode = v_c2.radio("Kleur op basis van:", ["Team", "Resultaat (Succes/Fail)"], horizontal=True)
+    show_lines = v_c1.checkbox("Toon Pass/Looplijnen (Start -> Eind)", value=False, key="pm_lines")
+    color_mode = v_c2.radio("Kleur op basis van:", ["Team", "Resultaat (Succes/Fail)"], horizontal=True, key="pm_color")
 
     # FILTER DATA
+    # Begin met basis
     df_m = df_events[
         (df_events['Team'].isin(sel_teams)) & 
         (df_events['action_clean'].isin(sel_acts))
-    ].copy() # Gebruik copy om warnings te voorkomen
+    ].copy() 
 
+    # Pas periode filter toe
+    if sel_period: df_m = df_m[df_m['periodId'].astype(str).isin(sel_period)]
+    
+    # Pas extra filters toe
     if sel_dist: df_m = df_m[df_m['distanceToOpponent'].isin(sel_dist)]
     if sel_pres: df_m = df_m[df_m['pressure'].isin(sel_pres)]
     if sel_phase: df_m = df_m[df_m['phase'].isin(sel_phase)]
@@ -307,122 +325,4 @@ with tab2:
         fig.add_shape(type="rect", x0=-52.5, y0=-34, x1=52.5, y1=34, line=dict(color="white"), fillcolor="#4CAF50", layer="below")
         fig.add_shape(type="line", x0=0, y0=-34, x1=0, y1=34, line=dict(color="white"))
         fig.add_shape(type="circle", x0=-9.15, y0=-9.15, x1=9.15, y1=9.15, line=dict(color="white"))
-        fig.add_shape(type="rect", x0=-52.5, y0=-20.16, x1=-36, y1=20.16, line=dict(color="white"))
-        fig.add_shape(type="rect", x0=-52.5, y0=-9.16, x1=-46.5, y1=9.16, line=dict(color="white"))
-        fig.add_shape(type="rect", x0=36, y0=-20.16, x1=52.5, y1=20.16, line=dict(color="white"))
-        fig.add_shape(type="rect", x0=46.5, y0=-9.16, x1=52.5, y1=9.16, line=dict(color="white"))
-
-        # Bepaal groepen (Team of Resultaat)
-        if color_mode == "Team":
-            groups = sel_teams
-        else:
-            # Maak result_plot kolom veilig aan op de kopie
-            df_m['result_plot'] = df_m['result_clean'].replace({'': 'NONE', 'nan': 'NONE'}).fillna('NONE')
-            groups = df_m['result_plot'].unique()
-
-        for key in groups:
-            if color_mode == "Team":
-                d = df_m[df_m['Team'] == key]
-                color = team_colors.get(key, '#95a5a6')
-                name_lbl = key
-            else:
-                d = df_m[df_m['result_plot'] == key]
-                color = result_colors.get(key, '#bdc3c7')
-                name_lbl = key
-
-            if d.empty: continue
-
-            # MARKERS
-            fig.add_trace(go.Scatter(
-                x=d['x_start'], y=d['y_start'], 
-                mode='markers', name=name_lbl,
-                marker=dict(color=color, size=8, line=dict(width=1,color='black')),
-                text=d['Speler'] + " (" + d['action'] + ") [" + d['result_clean'] + "]",
-                hovertemplate="%{text}<br>DistOpp: %{customdata[1]}<br>Press: %{customdata[2]}",
-                customdata=d[['TijdString', 'distanceToOpponent', 'pressure']]
-            ))
-            
-            # LIJNEN
-            if show_lines and len(d) < 2000:
-                x_lines = []
-                y_lines = []
-                for _, row in d.iterrows():
-                    if pd.notnull(row['x_end']) and pd.notnull(row['y_end']):
-                        x_lines.extend([row['x_start'], row['x_end'], None])
-                        y_lines.extend([row['y_start'], row['y_end'], None])
-                
-                if x_lines:
-                    fig.add_trace(go.Scatter(
-                        x=x_lines, y=y_lines,
-                        mode='lines',
-                        line=dict(color=color, width=1),
-                        opacity=0.5,
-                        showlegend=False,
-                        hoverinfo='skip'
-                    ))
-
-        fig.update_layout(
-            width=800, height=550, 
-            xaxis=dict(visible=False, range=[-55, 55]), 
-            yaxis=dict(visible=False, range=[-36, 36], scaleanchor="x", scaleratio=1),
-            plot_bgcolor='rgba(0,0,0,0)',
-            margin=dict(l=0, r=0, t=20, b=0)
-        )
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("Geen events met deze filters.")
-
-    # 2. RADAR CHART
-    st.divider()
-    st.subheader("🕸️ Spider Diagram: Team Vergelijking")
-    
-    if not df_m.empty and len(sel_acts) > 0:
-        radar_agg = df_m.groupby(['Team', 'action_clean']).size().reset_index(name='Count')
-        
-        fig_rad = go.Figure()
-        for t in sel_teams:
-            vals = []
-            for a in sel_acts:
-                row = radar_agg[(radar_agg['Team'] == t) & (radar_agg['action_clean'] == a)]
-                vals.append(row['Count'].values[0] if not row.empty else 0)
-            
-            # Sluit de cirkel
-            if vals:
-                vals_plot = vals + [vals[0]]
-                thetas_plot = sel_acts + [sel_acts[0]]
-                
-                fig_rad.add_trace(go.Scatterpolar(
-                    r=vals_plot, theta=thetas_plot,
-                    fill='toself', name=t,
-                    line_color=team_colors.get(t, '#95a5a6')
-                ))
-        
-        fig_rad.update_layout(polar=dict(radialaxis=dict(visible=True)), showlegend=True, height=500)
-        st.plotly_chart(fig_rad, use_container_width=True)
-
-# -----------------------------------------------------------------------------
-# TAB 3: SPELERS xT
-# -----------------------------------------------------------------------------
-with tab3:
-    st.subheader("🏆 Top xT Generators")
-    st.caption("Som van xT verschil (Delta) per speler.")
-    
-    xt_stats = df_events[df_events['Speler']!='Onbekend'].groupby(['Speler', 'Team'])['xT_Generated_Player'].sum().reset_index()
-    xt_stats = xt_stats.sort_values('xT_Generated_Player', ascending=False).head(20)
-    
-    c1, c2 = st.columns([1, 2])
-    with c1: st.dataframe(xt_stats, use_container_width=True, hide_index=True)
-    with c2:
-        fig_bar = px.bar(xt_stats, x='xT_Generated_Player', y='Speler', color='Team', orientation='h',
-                         color_discrete_map=team_colors, title="Top 20 xT Spelers")
-        fig_bar.update_layout(yaxis={'categoryorder':'total ascending'}, margin=dict(l=150))
-        st.plotly_chart(fig_bar, use_container_width=True)
-
-# -----------------------------------------------------------------------------
-# TAB 4: RAW
-# -----------------------------------------------------------------------------
-with tab4:
-    cols = ['Volgorde', 'Minuut', 'Team', 'Speler', 'action', 'result', 'distanceToOpponent', 'pressure', 'phase']
-    # Filter only existing columns
-    existing_cols = [c for c in cols if c in df_events.columns]
-    st.dataframe(df_events[existing_cols], use_container_width=True)
+        fig.add_shape(type="rect", x0=-5
