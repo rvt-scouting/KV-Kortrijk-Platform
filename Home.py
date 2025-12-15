@@ -50,14 +50,15 @@ def test_page_func():
     st.title("👤 Mijn Profiel")
     st.write(f"Naam: {st.session_state.user_info.get('naam')}")
     st.write(f"Rol: {st.session_state.user_info.get('rol')}")
+    st.write(f"Email: {st.session_state.user_info.get('email', '-')}")
 
 # Basis Pagina's
 pg_home = st.Page(welcome, title="Home", icon="🏠")
 pg_profile = st.Page(test_page_func, title="Mijn Profiel", icon="👤")
 
-# HOOFD PAGINA (De main data pagina)
-# AANGEPAST: Naam veranderd naar 'Diepte Analyse'
-pg_player = st.Page("views/1_⚽_Spelers_en_Teams.py", title="Diepte Analyse", icon="⚽")
+# HOOFD ANALYSE (GESPLITST)
+pg_player_analysis = st.Page("views/1_⚽_Spelers.py", title="Spelers Analyse", icon="⚽")
+pg_team_analysis = st.Page("views/10_🛡️_Teams.py", title="Team Analyse", icon="🛡️")
 
 # Scouting Modules
 pg_scout = st.Page("views/4_📝_Scouting.py", title="Scout Rapport Maken", icon="📝") 
@@ -105,17 +106,16 @@ else:
 
     # --- NIVEAU 3: MANAGEMENT / ADMIN ---
     elif lvl >= 3:
-        # AANGEPAST: Diepte Analyse staat nu HELEMAAL BOVENAAN in zijn eigen sectie
-        # Dit maakt het de "Main Page" na home
-        pages["🔍 Hoofd Analyse"] = [pg_player]
+        # 1. Hoofd Analyse (De kern)
+        pages["🔍 Hoofd Analyse"] = [pg_player_analysis, pg_team_analysis]
         
-        # Daarna Scouting & Markt
+        # 2. Scouting & Markt
         pages["Scouting & Markt"] = [pg_dashboard, pg_scout, pg_shortlists, pg_offer, pg_disc]
         
-        # Daarna overige Data
+        # 3. Overige Data
         pages["Performance Data"] = [pg_match, pg_coach]
         
-        # Tot slot Beheer
+        # 4. Beheer
         pages["Beheer"] = [pg_admin]
 
     # START DE NAVIGATIE
