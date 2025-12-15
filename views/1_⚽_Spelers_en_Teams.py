@@ -50,6 +50,7 @@ if selected_season and selected_competition:
         selected_iteration_id = str(df_details.iloc[0]['id'])
     else: st.error("Kon geen ID vinden."); st.stop() 
 else: st.warning("👈 Kies eerst een seizoen en competitie."); st.stop() 
+
 # =============================================================================
 # A. SPELERS MODUS
 # =============================================================================
@@ -84,6 +85,40 @@ if analysis_mode == "Spelers":
         elif len(candidate_rows) == 1: final_player_id = candidate_rows.iloc[0]['playerId']
         else: st.error("Selectie fout."); st.stop()
     except Exception as e: st.error("Fout bij ophalen spelers."); st.code(e); st.stop()
+
+    # =========================================================================
+    # NIEUW: CHECK OF SPELER IS AANGEBODEN (SCOUTING)
+    # =========================================================================
+    check_offer_q = """
+        SELECT status, makelaar, vraagprijs, opmerkingen 
+        FROM scouting.offered_players 
+        WHERE player_id = %s 
+        ORDER BY aangeboden_datum DESC LIMIT 1
+    """
+    df_offer = run_query(check_offer_q, params=(str(final_player_id),))
+
+    if not df_offer.empty:
+        offer_row = df_offer.iloc[0]
+        # Bepaal kleur op basis van status
+        status_color = "#f39c12" # Oranje (default)
+        if offer_row['status'] == 'Interessant': status_color = "#27ae60" # Groen
+        if offer_row['status'] == 'Afgekeurd': status_color = "#c0392b" # Rood
+        
+        price_display = f"€ {offer_row['vraagprijs']:,.0f}" if offer_row['vraagprijs'] else "Onbekend"
+        
+        # We gebruiken HTML voor een mooi kader
+        st.markdown(f"""
+            <div style="padding: 15px; background-color: {status_color}15; border: 2px solid {status_color}; border-radius: 8px; margin-bottom: 25px;">
+                <h4 style="color: {status_color}; margin:0;">📥 Aangeboden Speler</h4>
+                <p style="margin: 5px 0 0 0; font-size: 16px;">
+                    <strong>Status:</strong> {offer_row['status']} &nbsp;|&nbsp; 
+                    <strong>Makelaar:</strong> {offer_row['makelaar']} &nbsp;|&nbsp; 
+                    <strong>Vraagprijs:</strong> {price_display}
+                </p>
+                <p style="margin: 5px 0 0 0; font-style: italic; font-size: 14px; color: #555;">"{offer_row['opmerkingen']}"</p>
+            </div>
+        """, unsafe_allow_html=True)
+    # =========================================================================
 
     # 2. DATA OPHALEN
     st.divider()
@@ -397,4 +432,3 @@ elif analysis_mode == "Teams":
                 except Exception as e: st.error("Fout similarity."); st.code(e)
             else: st.error("Team details fout.")
     except Exception as e: st.error("Teamlijst fout."); st.code(e)
-
