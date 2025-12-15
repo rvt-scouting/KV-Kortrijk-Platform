@@ -57,6 +57,7 @@ pg_test = st.Page(test_page_func, title="Mijn Profiel", icon="👤")
 pg_scout = st.Page("views/4_📝_Scouting.py", title="Scouting Input", icon="📝") 
 pg_disc = st.Page("views/5_🔎_Discover.py", title="Discover", icon="🔎")
 pg_offer = st.Page("views/6_📥_Aangeboden.py", title="Aangeboden Spelers", icon="📥")
+pg_shortlists = st.Page("views/9_🎯_Shortlists.py", title="Shortlists Manager", icon="🎯") # NIEUW
 pg_dashboard = st.Page("views/7_📊_Scouting_Overzicht.py", title="Scouting Dashboard", icon="📊")
 
 # Data Modules
@@ -64,7 +65,7 @@ pg_match = st.Page("views/3_📊_Wedstrijden.py", title="Wedstrijden Analyse", i
 pg_coach = st.Page("views/2_👔_Coaches.py", title="Coaches", icon="👔")
 pg_player = st.Page("views/1_⚽_Spelers_en_Teams.py", title="Spelers & Teams", icon="⚽")
 
-# Admin Module (NIEUW)
+# Admin Module
 pg_admin = st.Page("views/8_⚙️_Admin.py", title="Admin Panel", icon="⚙️")
 
 # -----------------------------------------------------------------------------
@@ -90,7 +91,7 @@ else:
     
     # Level 1: Scouts (Input & Lijsten)
     if lvl >= 1: 
-        modules.extend([pg_scout, pg_offer, pg_dashboard, pg_disc])
+        modules.extend([pg_scout, pg_offer, pg_shortlists, pg_dashboard, pg_disc])
         
     # Level 2: Coaches/Managers (Data Analyse)
     if lvl >= 2: 
