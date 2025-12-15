@@ -48,9 +48,7 @@ if sel_season and sel_comp:
         
     match_opts = {f"{r['home']} - {r['away']} ({r['scheduledDate'].strftime('%d-%m')})": r['id'] for _, r in df_matches.iterrows()}
     sel_match_label = st.sidebar.selectbox("Wedstrijd", list(match_opts.keys()))
-    sel_match_id = str(match_opts[sel_match_label]) # Forceer string
-    
-    # Haal de specifieke rij op voor Home/Away ID's
+    sel_match_id = str(match_opts[sel_match_label])
     match_row = df_matches[df_matches['id'] == sel_match_id].iloc[0]
 else:
     st.stop()
@@ -59,11 +57,11 @@ st.title(f"🏟️ {match_row['home']} vs {match_row['away']}")
 st.caption(f"Datum: {match_row['scheduledDate'].strftime('%d-%m-%Y %H:%M')} | Match ID: {sel_match_id}")
 
 # -----------------------------------------------------------------------------
-# 2. DATA OPHALEN (OPTIMALISATIE & FIXES)
+# 2. DATA OPHALEN
 # -----------------------------------------------------------------------------
 @st.cache_data
 def get_match_data_optimized(match_id):
-    # STAP 1: Haal events op (Snel, zonder player join)
+    # STAP 1: Events
     q_events = """
         SELECT 
             e.id,
@@ -71,22 +69,14 @@ def get_match_data_optimized(match_id):
             e.action,
             e."actionType",
             e.result,
-            -- Haal ALLEEN het raw player ID op uit de json
             (e.player ->> 'id') as player_id_raw,
-            
-            -- Tijd
             (e."gameTime" ->> 'gameTime') as "Tijd",
             CAST(e."gameTime" ->> 'gameTimeInSec' AS FLOAT) / 60.0 as "Minuut",
-            
-            -- Coördinaten
             CAST(e."start" -> 'coordinates' ->> 'x' AS FLOAT) as x_start,
             CAST(e."start" -> 'coordinates' ->> 'y' AS FLOAT) as y_start,
             CAST(e."end" -> 'coordinates' ->> 'x' AS FLOAT) as x_end,
             CAST(e."end" -> 'coordinates' ->> 'y' AS FLOAT) as y_end,
-            
-            -- Extra
             CAST(e."pxT" ->> 'team' AS FLOAT) as "xT"
-
         FROM public.match_events e
         WHERE e."matchId" = %s 
         ORDER BY e.index ASC
@@ -96,13 +86,11 @@ def get_match_data_optimized(match_id):
     if df_ev.empty:
         return pd.DataFrame()
 
-    # STAP 2: Haal squad namen op (met juiste string formatting)
+    # STAP 2: Teams
     squad_ids = df_ev['squadId'].dropna().unique().tolist()
     if squad_ids:
-        # Formatteer voor SQL IN clause: 'id1', 'id2'
         s_ids_formatted = ", ".join(f"'{x}'" for x in squad_ids)
         q_squads = f"SELECT id, name FROM public.squads WHERE id IN ({s_ids_formatted})"
-             
         df_sq = run_query(q_squads)
         if not df_sq.empty:
             squad_map = dict(zip(df_sq['id'].astype(str), df_sq['name']))
@@ -112,16 +100,13 @@ def get_match_data_optimized(match_id):
     else:
         df_ev['Team'] = 'Onbekend'
 
-    # STAP 3: Haal speler namen op
+    # STAP 3: Spelers
     player_ids = df_ev['player_id_raw'].dropna().unique().tolist()
-    # Filter: zorg dat het strings zijn en alleen cijfers bevatten
     player_ids = [str(pid) for pid in player_ids if str(pid).isdigit()]
     
     if player_ids:
-        # Formatteer voor SQL IN clause: '123', '456'
         p_ids_formatted = ", ".join(f"'{x}'" for x in player_ids)
         q_players = f"SELECT id, commonname FROM public.players WHERE id IN ({p_ids_formatted})"
-            
         df_pl = run_query(q_players)
         
         if not df_pl.empty:
@@ -147,11 +132,9 @@ if df_events.empty:
 tab1, tab2, tab3 = st.tabs(["📊 Stats & Tijdlijn", "📍 Pitch Map (Veld)", "📋 Data Lijst"])
 
 with tab1:
-    # DEFINIEER ID's (Hier ging het mis)
+    # A. SCOREBORD
     home_id = str(match_row['homeSquadId'])
     away_id = str(match_row['awaySquadId'])
-
-    # Zorg dat de squadId in dataframe ook string is voor vergelijking
     df_events['squadId'] = df_events['squadId'].astype(str)
 
     goals_home = df_events[(df_events['squadId'] == home_id) & (df_events['action'] == 'Goal') & (df_events['result'] == 'Success')]
@@ -164,36 +147,62 @@ with tab1:
 
     c1, c2, c3 = st.columns([1, 2, 1])
     with c2:
-        st.markdown(f"<h1 style='text-align: center; border: 2px solid #ddd; border-radius:10px; padding:10px; background-color: #f8f9fa;'>{score_home} - {score_away}</h1>", unsafe_allow_html=True)
+        # Scorebord Styling: Kleur ingesteld op #333333 (Donkergrijs) voor leesbaarheid
+        st.markdown(f"""
+            <div style='text-align: center; border: 2px solid #ddd; border-radius:10px; padding:15px; background-color: #f8f9fa; color: #333333; margin-bottom: 20px;'>
+                <h1 style='margin:0; font-size: 3em;'>{score_home} - {score_away}</h1>
+                <p style='margin:0; font-size: 1.1em; color: #666;'>Eindstand</p>
+            </div>
+            """, unsafe_allow_html=True)
 
-    st.subheader("Wedstrijdverloop")
-    mask_tl = (df_events['action'].isin(['Goal', 'Own Goal', 'Card', 'Substitution'])) & ((df_events['result'] == 'Success') | (df_events['action'].isin(['Card', 'Substitution'])))
-    imp_events = df_events[mask_tl].copy()
-    
-    if not imp_events.empty:
-        color_map = {"Goal": "#2ecc71", "Own Goal": "#e74c3c", "Card": "#f1c40f", "Substitution": "#3498db"}
-        fig_tl = px.scatter(
-            imp_events, x="Minuut", y="Team", color="action", symbol="action",
-            hover_data=["Speler", "Tijd", "result"], size_max=15, color_discrete_map=color_map,
-            title="Tijdlijn"
-        )
-        fig_tl.update_traces(marker=dict(size=14, line=dict(width=1, color='DarkSlateGrey')))
-        fig_tl.update_layout(height=300)
-        st.plotly_chart(fig_tl, use_container_width=True)
+    # B. STATS & TIJDLIJN (Naast elkaar)
+    col_timeline, col_stats = st.columns([3, 2])
 
-    st.subheader("Gevaar & Balbezit")
+    with col_timeline:
+        st.subheader("Wedstrijdverloop")
+        mask_tl = (df_events['action'].isin(['Goal', 'Own Goal', 'Card', 'Substitution'])) & ((df_events['result'] == 'Success') | (df_events['action'].isin(['Card', 'Substitution'])))
+        imp_events = df_events[mask_tl].copy()
+        
+        if not imp_events.empty:
+            color_map = {"Goal": "#2ecc71", "Own Goal": "#e74c3c", "Card": "#f1c40f", "Substitution": "#3498db"}
+            fig_tl = px.scatter(
+                imp_events, x="Minuut", y="Team", color="action", symbol="action",
+                hover_data=["Speler", "Tijd", "result"], size_max=15, color_discrete_map=color_map
+            )
+            fig_tl.update_traces(marker=dict(size=14, line=dict(width=1, color='DarkSlateGrey')))
+            fig_tl.update_layout(height=400, legend=dict(orientation="h", y=1.1))
+            st.plotly_chart(fig_tl, use_container_width=True)
+        else:
+            st.info("Geen hoogtepunten in de tijdlijn.")
+
+    with col_stats:
+        st.subheader("Statistieken")
+        # Draaitabel maken
+        stats_counts = df_events.groupby(['Team', 'action']).size().reset_index(name='Aantal')
+        stats_pivot = stats_counts.pivot(index='action', columns='Team', values='Aantal').fillna(0).astype(int)
+        
+        # Sorteren op totaal aantal acties zodat de belangrijkste bovenaan staan
+        stats_pivot['Totaal'] = stats_pivot.sum(axis=1)
+        stats_pivot = stats_pivot.sort_values('Totaal', ascending=False).drop(columns='Totaal')
+        
+        st.dataframe(stats_pivot, use_container_width=True)
+
+    # C. EXTRA GRAFIEKEN
+    st.divider()
     c_xt1, c_xt2 = st.columns(2)
     with c_xt1:
+        st.write("**Expected Threat (xT)**")
         if 'xT' in df_events.columns:
             xt_stats = df_events.groupby('Team')['xT'].sum().reset_index()
-            fig_xt = px.bar(xt_stats, x='Team', y='xT', title="Expected Threat (xT) Totaal", color='Team')
+            fig_xt = px.bar(xt_stats, x='Team', y='xT', color='Team', color_discrete_sequence=px.colors.qualitative.Pastel)
             st.plotly_chart(fig_xt, use_container_width=True)
     with c_xt2:
+        st.write("**Succesvolle Passes**")
         passes = df_events[(df_events['action'] == 'Pass') & (df_events['result'] == 'Success')]
         if not passes.empty:
             p_counts = passes['Team'].value_counts().reset_index()
             p_counts.columns = ['Team', 'Passes']
-            fig_pie = px.pie(p_counts, values='Passes', names='Team', title="Succesvolle Passes", hole=0.4)
+            fig_pie = px.pie(p_counts, values='Passes', names='Team', hole=0.4, color_discrete_sequence=px.colors.qualitative.Pastel)
             st.plotly_chart(fig_pie, use_container_width=True)
 
 # -----------------------------------------------------------------------------
