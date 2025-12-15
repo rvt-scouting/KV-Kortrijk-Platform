@@ -49,6 +49,7 @@ else:
     st.stop()
 
 if sel_season and sel_comp:
+    # AANGEPASTE QUERY: Filter op datum <= NOW()
     q_matches = """
         SELECT m.id, m."scheduledDate", h.name as home, a.name as away, 
                m."homeSquadId", m."awaySquadId"
@@ -56,12 +57,15 @@ if sel_season and sel_comp:
         JOIN public.squads h ON m."homeSquadId" = h.id
         JOIN public.squads a ON m."awaySquadId" = a.id
         JOIN public.iterations i ON m."iterationId" = i.id
-        WHERE i.season = %s AND i."competitionName" = %s
+        WHERE i.season = %s 
+          AND i."competitionName" = %s
+          AND m."scheduledDate" <= NOW()  -- FILTER: Geen toekomst
         ORDER BY m."scheduledDate" DESC
     """
     df_matches = run_query(q_matches, (sel_season, sel_comp))
+    
     if df_matches.empty:
-        st.warning("Geen wedstrijden.")
+        st.warning("Geen gespeelde wedstrijden gevonden.")
         st.stop()
         
     match_opts = {f"{r['home']} - {r['away']} ({r['scheduledDate'].strftime('%d-%m')})": r['id'] for _, r in df_matches.iterrows()}
@@ -270,7 +274,6 @@ result_colors = {'SUCCESS': '#2ecc71', 'FAIL': '#e74c3c', 'OFFSIDE': '#95a5a6', 
 # -----------------------------------------------------------------------------
 # 4. DASHBOARD TABS
 # -----------------------------------------------------------------------------
-# NIEUWE VOLGORDE
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["👥 Opstellingen", "📊 Stats & Tijdlijn", "📍 Pitch Map & Radar", "🏃 Spelers xT", "📋 Data"])
 
 # --- TAB 1: OPSTELLINGEN ---
