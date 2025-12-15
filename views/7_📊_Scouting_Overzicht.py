@@ -15,13 +15,28 @@ st.sidebar.header("🔍 Filters Rapporten")
 # Filter: Datum
 date_range = st.sidebar.date_input("Datum Periode", [])
 
-# Filter: Scouts
+# Filter: Scouts (AANGEPAST: nu via scouting.gebruikers)
 try:
-    df_scouts = run_query("SELECT id, naam FROM scouting.scouts ORDER BY naam")
-    scout_opts = df_scouts['naam'].tolist()
-    selected_scouts = st.sidebar.multiselect("Selecteer Scout(s)", scout_opts, default=scout_opts)
+    df_scouts = run_query("SELECT id, naam FROM scouting.gebruikers WHERE rol != 'Admin' ORDER BY naam")
+    if not df_scouts.empty:
+        scout_opts = df_scouts['naam'].tolist()
+        selected_scouts = st.sidebar.multiselect("Selecteer Scout(s)", scout_opts, default=scout_opts)
+    else:
+        selected_scouts = []
 except:
     selected_scouts = []
+
+# Filter: Advies (NIEUW)
+try:
+    df_advies = run_query("SELECT DISTINCT advies FROM scouting.rapporten WHERE advies IS NOT NULL ORDER BY advies")
+    if not df_advies.empty:
+        advies_opts = df_advies['advies'].tolist()
+        # Standaard alles selecteren of leeg laten (leeg = alles tonen)
+        selected_advies = st.sidebar.multiselect("Filter op Advies", advies_opts)
+    else:
+        selected_advies = []
+except:
+    selected_advies = []
 
 # Filter: Rating & Gouden Buzzer
 min_rating = st.sidebar.slider("Minimale Beoordeling", 1, 10, 1)
@@ -43,7 +58,7 @@ tab1, tab2, tab3, tab4 = st.tabs([
 with tab1:
     st.header("Alle Scouting Rapporten")
     
-    # Query: We moeten slim omgaan met de Database-IDs vs Manuele Namen (COALESCE)
+    # Query (AANGEPAST: scouting.gebruikers ipv scouts)
     query = """
         SELECT 
             r.id,
@@ -57,7 +72,7 @@ with tab1:
             r.gouden_buzzer as "Gold",
             r.rapport_tekst as "Rapport"
         FROM scouting.rapporten r
-        LEFT JOIN scouting.scouts s ON r.scout_id = s.id
+        LEFT JOIN scouting.gebruikers s ON r.scout_id = s.id
         LEFT JOIN public.players p ON r.speler_id = p.id
         LEFT JOIN public.matches m ON r.wedstrijd_id = m.id
         LEFT JOIN public.squads sq_h ON m."homeSquadId" = sq_h.id
@@ -70,18 +85,23 @@ with tab1:
         
         if not df_reports.empty:
             # --- FILTERS TOEPASSEN ---
+            
             # 1. Scout Filter
             if selected_scouts:
                 df_reports = df_reports[df_reports['Scout'].isin(selected_scouts)]
             
-            # 2. Rating Filter
+            # 2. Advies Filter (NIEUW)
+            if selected_advies:
+                df_reports = df_reports[df_reports['Advies'].isin(selected_advies)]
+
+            # 3. Rating Filter
             df_reports = df_reports[df_reports['Rating'] >= min_rating]
             
-            # 3. Gold Filter
+            # 4. Gold Filter
             if show_only_gold:
                 df_reports = df_reports[df_reports['Gold'] == True]
 
-            # 4. Datum Filter (Als er data gekozen zijn)
+            # 5. Datum Filter
             if len(date_range) == 2:
                 start_date, end_date = date_range
                 df_reports['Datum'] = pd.to_datetime(df_reports['Datum'])
@@ -93,9 +113,17 @@ with tab1:
             # --- WEERGAVE ---
             st.markdown(f"**{len(df_reports)}** rapporten gevonden.")
             
-            # Mooiere tabel met st.dataframe config
+            # STYLING FUNCTIE (NIEUW)
+            def color_advice(val):
+                # Check of de waarde bestaat en converteer naar string voor veiligheid
+                val_str = str(val).lower().strip()
+                if val_str in ['sign', 'future sign', 'a', 'a+']: # Voeg hier termen toe die groen moeten
+                    return 'color: #2ecc71; font-weight: bold' # Groen & Dikgedrukt
+                return ''
+
+            # Mooiere tabel met styling
             st.dataframe(
-                df_reports,
+                df_reports.style.applymap(color_advice, subset=['Advies']),
                 use_container_width=True,
                 hide_index=True,
                 column_config={
@@ -118,22 +146,17 @@ with tab1:
 with tab2:
     st.header("🎯 Shortlists")
     
-    # Haal eerst de shortlist namen op
     try:
-        # AANGEPAST: id en naam ophalen (ipv value/label)
         sl_opts = run_query("SELECT id, naam FROM scouting.shortlists ORDER BY id")
         
         if not sl_opts.empty:
-            # Maak tabs voor elke shortlist
             sl_tabs = st.tabs(sl_opts['naam'].tolist())
             
             for i, row in sl_opts.iterrows():
-                sl_id = row['id']     # AANGEPAST
-                sl_name = row['naam'] # AANGEPAST
+                sl_id = row['id']
+                sl_name = row['naam']
                 
                 with sl_tabs[i]:
-                    # Haal spelers op die op deze shortlist staan
-                    # We pakken het meest recente rapport per speler voor deze shortlist
                     q_sl = """
                         SELECT DISTINCT ON (r.speler_id, r.custom_speler_naam)
                             COALESCE(p.commonname, r.custom_speler_naam) as "Speler",
@@ -145,15 +168,22 @@ with tab2:
                             r.aangemaakt_op as "Datum"
                         FROM scouting.rapporten r
                         LEFT JOIN public.players p ON r.speler_id = p.id
-                        LEFT JOIN scouting.scouts s ON r.scout_id = s.id
+                        LEFT JOIN scouting.gebruikers s ON r.scout_id = s.id
                         WHERE r.shortlist_id = %s
                         ORDER BY r.speler_id, r.custom_speler_naam, r.aangemaakt_op DESC
                     """
                     df_sl = run_query(q_sl, params=(sl_id,))
                     
                     if not df_sl.empty:
+                        # Hier ook de groene styling toepassen!
+                        def color_advice_simple(val):
+                            val_str = str(val).lower().strip()
+                            if val_str in ['sign', 'future sign', 'a']:
+                                return 'color: #2ecc71; font-weight: bold'
+                            return ''
+
                         st.dataframe(
-                            df_sl, 
+                            df_sl.style.applymap(color_advice_simple, subset=['Advies']), 
                             use_container_width=True, 
                             hide_index=True,
                             column_config={
@@ -164,7 +194,7 @@ with tab2:
                     else:
                         st.info(f"Nog geen rapporten gekoppeld aan shortlist '{sl_name}'.")
         else:
-            st.warning("Nog geen shortlists aangemaakt. Ga naar de Admin of Shortlist Manager.")
+            st.warning("Nog geen shortlists aangemaakt.")
             
     except Exception as e:
         st.error(f"Fout bij laden shortlists: {e}")
@@ -175,7 +205,6 @@ with tab2:
 with tab3:
     st.header("📥 Aangeboden Spelers")
     
-    # Filter op status
     status_filter = st.multiselect(
         "Filter op Status", 
         ["Interessant", "Te bekijken", "Onderhandeling", "In de gaten houden", "Afgekeurd"],
@@ -207,12 +236,11 @@ with tab3:
     try:
         df_market = run_query(q_market)
         if not df_market.empty:
-            # Kleurmarkering voor status
             def color_status(val):
                 color = 'black'
-                if val == 'Interessant': color = '#27ae60' # Green
-                elif val == 'Afgekeurd': color = '#c0392b' # Red
-                elif val == 'Onderhandeling': color = '#f39c12' # Orange
+                if val == 'Interessant': color = '#27ae60' 
+                elif val == 'Afgekeurd': color = '#c0392b' 
+                elif val == 'Onderhandeling': color = '#f39c12' 
                 return f'color: {color}; font-weight: bold'
 
             st.dataframe(
@@ -240,11 +268,10 @@ with tab4:
     col1, col2 = st.columns(2)
     
     with col1:
-        # 1. Aantal rapporten per scout
         q_stats = """
             SELECT s.naam as "Scout", COUNT(r.id) as "Aantal Rapporten"
             FROM scouting.rapporten r
-            JOIN scouting.scouts s ON r.scout_id = s.id
+            JOIN scouting.gebruikers s ON r.scout_id = s.id
             GROUP BY s.naam
             ORDER BY "Aantal Rapporten" DESC
         """
@@ -254,7 +281,6 @@ with tab4:
             st.plotly_chart(fig, use_container_width=True)
             
     with col2:
-        # 2. Verdeling per Advies
         q_adv = """
             SELECT advies, COUNT(id) as "Aantal"
             FROM scouting.rapporten
@@ -267,13 +293,12 @@ with tab4:
 
     st.markdown("---")
     st.subheader("Laatste 10 Activiteiten")
-    # Tijdlijn
     q_log = """
         SELECT r.aangemaakt_op, s.naam, 
                COALESCE(p.commonname, r.custom_speler_naam) as speler, 
                r.beoordeling
         FROM scouting.rapporten r
-        JOIN scouting.scouts s ON r.scout_id = s.id
+        JOIN scouting.gebruikers s ON r.scout_id = s.id
         LEFT JOIN public.players p ON r.speler_id = p.id
         ORDER BY r.aangemaakt_op DESC LIMIT 10
     """
