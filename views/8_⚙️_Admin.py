@@ -11,11 +11,13 @@ if 'user_info' not in st.session_state or not st.session_state.user_info:
     st.warning("⚠️ Log in AUB.")
     st.stop()
 
-# Haal niveau op
+# Haal niveau en ID op
 try:
     lvl = int(st.session_state.user_info.get('toegangsniveau', 0))
+    current_user_id = st.session_state.user_info.get('id')
 except:
     lvl = 0
+    current_user_id = None
 
 # Alleen niveau 3 (Admin) mag hier komen
 if lvl < 3:
@@ -71,30 +73,27 @@ with tab1:
         
         if submitted_user:
             if new_naam and new_email and new_pass:
-                # 1. Check of email al bestaat
+                # 1. Check dubbele email
                 check = run_query("SELECT id FROM scouting.gebruikers WHERE email = %s", params=(new_email,))
                 
                 if not check.empty:
                     st.error("Deze email bestaat al in de database!")
                 else:
-                    # 2. Insert Query (AANGEPAST NAAR JOUW KOLOMMEN)
+                    # 2. Insert
                     q_user = """
                         INSERT INTO scouting.gebruikers 
                         (email, wachtwoord, naam, rol, toegangsniveau, actief)
                         VALUES (%s, %s, %s, %s, %s, %s)
                     """
-                    # We slaan het wachtwoord hier plat op (zoals besproken), 
-                    # idealiter hash je dit in de toekomst.
                     if execute_command(q_user, params=(new_email, new_pass, new_naam, new_rol, new_lvl, new_actief)):
                         st.success(f"Gebruiker **{new_naam}** succesvol aangemaakt!")
-                        st.cache_data.clear() # Cache wissen zodat de lijst hieronder update
+                        st.cache_data.clear()
             else:
                 st.warning("Vul minimaal Naam, Email en Wachtwoord in.")
 
     st.divider()
     st.subheader("Overzicht Gebruikers")
     
-    # Tabel tonen met de juiste kolommen
     df_users = run_query("""
         SELECT id, naam, email, rol, toegangsniveau, actief 
         FROM scouting.gebruikers 
@@ -122,17 +121,20 @@ with tab2:
     st.info("Shortlists worden gebruikt om spelers te groeperen (bv. 'Zomer 2025', 'Keepers').")
     
     with st.form("add_shortlist_form", clear_on_submit=True):
-        new_label = st.text_input("Naam van Shortlist (Label)", placeholder="bv. Winter 2026")
+        new_naam = st.text_input("Naam van Shortlist", placeholder="bv. Winter 2026")
         
         submitted_sl = st.form_submit_button("💾 Shortlist Toevoegen")
         
         if submitted_sl:
-            if new_label:
-                # We voegen alleen label toe, value (ID) wordt auto-generated door sequence in Postgres
-                q_sl = "INSERT INTO scouting.shortlists (label) VALUES (%s)"
+            if new_naam:
+                # AANGEPAST: Gebruik kolom 'naam' en voeg 'eigenaar_id' toe
+                q_sl = """
+                    INSERT INTO scouting.shortlists (naam, eigenaar_id, aangemaakt_op) 
+                    VALUES (%s, %s, NOW())
+                """
                 
-                if execute_command(q_sl, params=(new_label,)):
-                    st.success(f"Shortlist '{new_label}' toegevoegd!")
+                if execute_command(q_sl, params=(new_naam, current_user_id)):
+                    st.success(f"Shortlist '{new_naam}' toegevoegd!")
                     st.cache_data.clear()
             else:
                 st.warning("Vul een naam in.")
@@ -140,21 +142,20 @@ with tab2:
     st.divider()
     st.subheader("Actieve Shortlists")
     
-    # We gaan ervan uit dat je tabel kolommen 'value' (id) en 'label' (naam) heeft
-    # Als jouw tabel 'id' en 'naam' heet, pas de query hieronder dan aan.
+    # AANGEPAST: Selecteer id en naam
     try:
-        df_sl = run_query("SELECT value, label FROM scouting.shortlists ORDER BY value")
+        df_sl = run_query("SELECT id, naam FROM scouting.shortlists ORDER BY id")
         if not df_sl.empty:
             st.dataframe(
                 df_sl, 
                 use_container_width=True, 
                 hide_index=True,
                 column_config={
-                    "value": "ID",
-                    "label": "Naam Lijst"
+                    "id": "ID",
+                    "naam": "Naam Lijst"
                 }
             )
         else:
             st.info("Geen shortlists gevonden.")
     except Exception as e:
-        st.error(f"Kon shortlists niet laden (check kolomnamen): {e}")
+        st.error(f"Fout bij laden shortlists: {e}")
