@@ -55,7 +55,7 @@ pg_home = st.Page(welcome, title="Home", icon="🏠")
 pg_test = st.Page(test_page_func, title="Systeem Test", icon="🛠️")
 
 # Zorg dat deze bestanden echt bestaan in 'views/'!
-pg_scout = st.Page("views/scouting.py", title="Scouting", icon="📝") 
+pg_scout = st.Page("4_📝_Scouting.py", title="Scouting", icon="📝") 
 pg_disc = st.Page("views/5_🔎_Discover.py", title="Discover", icon="🔎")
 pg_offer = st.Page("views/6_📥_Aangeboden.py", title="Aangeboden", icon="📥")
 pg_match = st.Page("views/3_📊_Wedstrijden.py", title="Wedstrijden", icon="📊")
