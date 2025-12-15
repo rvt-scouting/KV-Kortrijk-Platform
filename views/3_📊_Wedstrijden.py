@@ -48,7 +48,7 @@ if sel_season and sel_comp:
         
     match_opts = {f"{r['home']} - {r['away']} ({r['scheduledDate'].strftime('%d-%m')})": r['id'] for _, r in df_matches.iterrows()}
     sel_match_label = st.sidebar.selectbox("Wedstrijd", list(match_opts.keys()))
-    sel_match_id = str(match_opts[sel_match_label]) # Forceer string
+    sel_match_id = str(match_opts[sel_match_label])
     match_row = df_matches[df_matches['id'] == sel_match_id].iloc[0]
 else:
     st.stop()
@@ -57,58 +57,93 @@ st.title(f"🏟️ {match_row['home']} vs {match_row['away']}")
 st.caption(f"Datum: {match_row['scheduledDate'].strftime('%d-%m-%Y %H:%M')} | Match ID: {sel_match_id}")
 
 # -----------------------------------------------------------------------------
-# 2. DATA OPHALEN (ROBUUST)
+# 2. DATA OPHALEN (OPTIMALISATIE: GEEN ZWARE JOINS)
 # -----------------------------------------------------------------------------
 @st.cache_data
-def get_match_events(match_id):
-    # 1. DEBUG CHECK: Zijn er überhaupt events?
-    check_q = 'SELECT COUNT(*) as cnt FROM public.match_events WHERE "matchId" = %s'
-    check_df = run_query(check_q, (match_id,))
-    if check_df.empty or check_df.iloc[0]['cnt'] == 0:
-        return pd.DataFrame() # Leeg teruggeven
-
-    # 2. DATA OPHALEN
-    # We gebruiken TRIM en CAST om zeker te zijn dat de joins werken
-    q = """
+def get_match_data_optimized(match_id):
+    # STAP 1: Haal events op (Snel, zonder player join)
+    q_events = """
         SELECT 
             e.id,
             e."squadId",
-            sq.name as "Team",
             e.action,
             e."actionType",
             e.result,
-            COALESCE(p.commonname, e.player ->> 'name', 'Onbekend') as "Speler",
+            -- Haal ALLEEN het raw player ID op uit de json
+            (e.player ->> 'id') as player_id_raw,
             
-            -- Tijd data
+            -- Tijd
             (e."gameTime" ->> 'gameTime') as "Tijd",
             CAST(e."gameTime" ->> 'gameTimeInSec' AS FLOAT) / 60.0 as "Minuut",
             
-            -- Start Coördinaten (Veilige JSON extractie)
+            -- Coördinaten
             CAST(e."start" -> 'coordinates' ->> 'x' AS FLOAT) as x_start,
             CAST(e."start" -> 'coordinates' ->> 'y' AS FLOAT) as y_start,
-            
-            -- Eind Coördinaten
             CAST(e."end" -> 'coordinates' ->> 'x' AS FLOAT) as x_end,
             CAST(e."end" -> 'coordinates' ->> 'y' AS FLOAT) as y_end,
             
-            -- Extra data
-            CAST(e."pass" ->> 'distance' AS FLOAT) as "Pass Afstand",
+            -- Extra
             CAST(e."pxT" ->> 'team' AS FLOAT) as "xT"
 
         FROM public.match_events e
-        LEFT JOIN public.squads sq ON CAST(e."squadId" AS TEXT) = CAST(sq.id AS TEXT)
-        LEFT JOIN public.players p ON (e.player ->> 'id') = CAST(p.id AS TEXT)
-        WHERE TRIM(e."matchId") = TRIM(%s)
+        WHERE e."matchId" = %s 
         ORDER BY e.index ASC
     """
-    return run_query(q, (match_id,))
+    # Let op: we gebruiken matchId direct (string) om index te raken
+    df_ev = run_query(q_events, (match_id,))
+    
+    if df_ev.empty:
+        return pd.DataFrame()
 
-with st.spinner("Event data laden..."):
-    df_events = get_match_events(sel_match_id)
+    # STAP 2: Haal squad namen op (kleine query)
+    squad_ids = df_ev['squadId'].unique().tolist()
+    if squad_ids:
+        # Formatteer voor SQL IN clause
+        s_ids_tuple = tuple(str(x) for x in squad_ids)
+        # Fix voor als er maar 1 team is (tuple bug in python)
+        if len(squad_ids) == 1: 
+             q_squads = f"SELECT id, name FROM public.squads WHERE id = '{squad_ids[0]}'"
+        else:
+             q_squads = f"SELECT id, name FROM public.squads WHERE id IN {s_ids_tuple}"
+             
+        df_sq = run_query(q_squads)
+        # Maak dictionary: id -> naam
+        squad_map = dict(zip(df_sq['id'].astype(str), df_sq['name']))
+        # Map de namen
+        df_ev['Team'] = df_ev['squadId'].astype(str).map(squad_map).fillna('Onbekend')
+    else:
+        df_ev['Team'] = 'Onbekend'
+
+    # STAP 3: Haal speler namen op (alleen voor de spelers in deze match)
+    player_ids = df_ev['player_id_raw'].dropna().unique().tolist()
+    
+    # Filter non-numeric IDs eruit voor de zekerheid
+    player_ids = [pid for pid in player_ids if str(pid).isdigit()]
+    
+    if player_ids:
+        p_ids_tuple = tuple(int(x) for x in player_ids)
+        if len(player_ids) == 1:
+            q_players = f"SELECT id, commonname FROM public.players WHERE id = {player_ids[0]}"
+        else:
+            q_players = f"SELECT id, commonname FROM public.players WHERE id IN {p_ids_tuple}"
+            
+        df_pl = run_query(q_players)
+        
+        # Maak dictionary: id (string) -> naam
+        player_map = dict(zip(df_pl['id'].astype(str), df_pl['commonname']))
+        
+        # Map de namen
+        df_ev['Speler'] = df_ev['player_id_raw'].astype(str).map(player_map).fillna('Onbekend')
+    else:
+        df_ev['Speler'] = 'Onbekend'
+
+    return df_ev
+
+with st.spinner("Event data analyseren (Geoptimaliseerd)..."):
+    df_events = get_match_data_optimized(sel_match_id)
 
 if df_events.empty:
-    st.warning(f"⚠️ Geen event data gevonden voor Match ID {sel_match_id}.")
-    st.info("Mogelijke oorzaken: Data nog niet ingeladen, of ID mismatch in database.")
+    st.warning(f"⚠️ Geen events gevonden (ID: {sel_match_id}).")
     st.stop()
 
 # -----------------------------------------------------------------------------
@@ -117,7 +152,6 @@ if df_events.empty:
 tab1, tab2, tab3 = st.tabs(["📊 Stats & Tijdlijn", "📍 Pitch Map (Veld)", "📋 Data Lijst"])
 
 with tab1:
-    # A. Scorebord Logic (Incl Own Goals)
     home_id = match_row['homeSquadId']
     away_id = match_row['awaySquadId']
 
@@ -132,9 +166,7 @@ with tab1:
     c1, c2, c3 = st.columns([1, 2, 1])
     with c2:
         st.markdown(f"<h1 style='text-align: center; border: 2px solid #ddd; border-radius:10px; padding:10px; background-color: #f8f9fa;'>{score_home} - {score_away}</h1>", unsafe_allow_html=True)
-        st.caption("Eindstand (inclusief eigen doelpunten)")
 
-    # B. Tijdlijn
     st.subheader("Wedstrijdverloop")
     mask_tl = (df_events['action'].isin(['Goal', 'Own Goal', 'Card', 'Substitution'])) & ((df_events['result'] == 'Success') | (df_events['action'].isin(['Card', 'Substitution'])))
     imp_events = df_events[mask_tl].copy()
@@ -150,16 +182,13 @@ with tab1:
         fig_tl.update_layout(height=300)
         st.plotly_chart(fig_tl, use_container_width=True)
 
-    # C. xT en Stats
     st.subheader("Gevaar & Balbezit")
     c_xt1, c_xt2 = st.columns(2)
-    
     with c_xt1:
         if 'xT' in df_events.columns:
             xt_stats = df_events.groupby('Team')['xT'].sum().reset_index()
             fig_xt = px.bar(xt_stats, x='Team', y='xT', title="Expected Threat (xT) Totaal", color='Team')
             st.plotly_chart(fig_xt, use_container_width=True)
-        
     with c_xt2:
         passes = df_events[(df_events['action'] == 'Pass') & (df_events['result'] == 'Success')]
         if not passes.empty:
@@ -173,7 +202,6 @@ with tab1:
 # -----------------------------------------------------------------------------
 with tab2:
     st.subheader("📍 Event Locaties")
-    
     cf1, cf2, cf3 = st.columns(3)
     
     teams = df_events['Team'].dropna().unique().tolist()
@@ -187,74 +215,43 @@ with tab2:
     players = df_events['Speler'].dropna().unique().tolist()
     sel_players = cf3.multiselect("Speler (Optioneel)", players)
     
-    show_lines = st.checkbox("Toon Pass/Looplijnen (Start -> Eind)", value=False)
+    show_lines = st.checkbox("Toon Pass/Looplijnen", value=False)
 
-    # Filter
-    df_m = df_events[
-        (df_events['Team'].isin(sel_teams)) & 
-        (df_events['action'].isin(sel_actions))
-    ]
-    if sel_players:
-        df_m = df_m[df_m['Speler'].isin(sel_players)]
+    df_m = df_events[(df_events['Team'].isin(sel_teams)) & (df_events['action'].isin(sel_actions))]
+    if sel_players: df_m = df_m[df_m['Speler'].isin(sel_players)]
         
     if not df_m.empty:
         fig = go.Figure()
-
-        # VELD ACHTERGROND (100x100)
+        # Veld (100x100)
         fig.add_shape(type="rect", x0=0, y0=0, x1=100, y1=100, line=dict(color="white"), fillcolor="#4CAF50", layer="below")
         fig.add_shape(type="line", x0=50, y0=0, x1=50, y1=100, line=dict(color="white", width=2))
         fig.add_shape(type="circle", x0=40, y0=40, x1=60, y1=60, line=dict(color="white", width=2))
-        fig.add_shape(type="rect", x0=0, y0=20, x1=17, y1=80, line=dict(color="white", width=2)) # Box L
-        fig.add_shape(type="rect", x0=83, y0=20, x1=100, y1=80, line=dict(color="white", width=2)) # Box R
+        fig.add_shape(type="rect", x0=0, y0=20, x1=17, y1=80, line=dict(color="white", width=2))
+        fig.add_shape(type="rect", x0=83, y0=20, x1=100, y1=80, line=dict(color="white", width=2))
         
-        # PLOT EVENTS
         colors = px.colors.qualitative.Bold
-        
         for i, team in enumerate(sel_teams):
             dft = df_m[df_m['Team'] == team]
             color = colors[i % len(colors)]
             
-            # Markers
             fig.add_trace(go.Scatter(
-                x=dft['x_start'], y=dft['y_start'],
-                mode='markers', name=team,
+                x=dft['x_start'], y=dft['y_start'], mode='markers', name=team,
                 marker=dict(size=8, color=color, line=dict(width=1, color='black')),
                 text=dft['Speler'] + " (" + dft['action'] + ")",
-                hovertemplate="%{text}<br>Min: %{customdata[0]}<br>xT: %{customdata[1]:.3f}",
-                customdata=dft[['Tijd', 'xT']]
+                hovertemplate="%{text}<br>Min: %{customdata[0]}", customdata=dft[['Minuut']]
             ))
             
-            # LIJNEN
-            if show_lines:
-                if len(dft) < 1000: 
-                    for _, row in dft.iterrows():
-                        if pd.notnull(row['x_end']) and pd.notnull(row['y_end']):
-                            fig.add_trace(go.Scatter(
-                                x=[row['x_start'], row['x_end']],
-                                y=[row['y_start'], row['y_end']],
-                                mode='lines',
-                                line=dict(color=color, width=1),
-                                opacity=0.4,
-                                showlegend=False,
-                                hoverinfo='skip'
-                            ))
-                else:
-                    st.caption(f"⚠️ Te veel events ({len(dft)}) om lijnen te tekenen voor {team}.")
+            if show_lines and len(dft) < 1000:
+                for _, row in dft.iterrows():
+                    if pd.notnull(row['x_end']) and pd.notnull(row['y_end']):
+                        fig.add_trace(go.Scatter(
+                            x=[row['x_start'], row['x_end']], y=[row['y_start'], row['y_end']],
+                            mode='lines', line=dict(color=color, width=1), opacity=0.4, showlegend=False, hoverinfo='skip'
+                        ))
 
-        fig.update_layout(
-            width=800, height=650,
-            xaxis=dict(range=[-5, 105], showgrid=False, visible=False),
-            yaxis=dict(range=[-5, 105], showgrid=False, visible=False),
-            plot_bgcolor='rgba(0,0,0,0)',
-            margin=dict(l=10, r=10, t=30, b=10)
-        )
+        fig.update_layout(width=800, height=650, xaxis=dict(visible=False, range=[-5,105]), yaxis=dict(visible=False, range=[-5,105]), plot_bgcolor='rgba(0,0,0,0)')
         st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("Geen events met deze filters.")
+    else: st.info("Geen events.")
 
-# -----------------------------------------------------------------------------
-# 5. RAW DATA
-# -----------------------------------------------------------------------------
 with tab3:
-    st.subheader("📋 Ruwe Data")
     st.dataframe(df_events, use_container_width=True)
