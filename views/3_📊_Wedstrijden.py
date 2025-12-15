@@ -61,10 +61,10 @@ st.caption(f"Datum: {match_row['scheduledDate'].strftime('%d-%m-%Y %H:%M')} | Ma
 # -----------------------------------------------------------------------------
 @st.cache_data
 def get_match_data_optimized(match_id):
-    # STAP 1: Events
+    # STAP 1: Events met INDEX ipv ID voor volgorde
     q_events = """
         SELECT 
-            e.id,
+            e.index as "Volgorde",  -- Belangrijk: De index kolom gebruiken
             e."squadId",
             e.action,
             e."actionType",
@@ -132,7 +132,7 @@ if df_events.empty:
 tab1, tab2, tab3 = st.tabs(["📊 Stats & Tijdlijn", "📍 Pitch Map (Veld)", "📋 Data Lijst"])
 
 with tab1:
-    # A. SCOREBORD
+    # A. SCOREBORD (Berekend o.b.v. Goals)
     home_id = str(match_row['homeSquadId'])
     away_id = str(match_row['awaySquadId'])
     df_events['squadId'] = df_events['squadId'].astype(str)
@@ -147,7 +147,6 @@ with tab1:
 
     c1, c2, c3 = st.columns([1, 2, 1])
     with c2:
-        # Scorebord Styling: Kleur ingesteld op #333333 (Donkergrijs) voor leesbaarheid
         st.markdown(f"""
             <div style='text-align: center; border: 2px solid #ddd; border-radius:10px; padding:15px; background-color: #f8f9fa; color: #333333; margin-bottom: 20px;'>
                 <h1 style='margin:0; font-size: 3em;'>{score_home} - {score_away}</h1>
@@ -155,35 +154,49 @@ with tab1:
             </div>
             """, unsafe_allow_html=True)
 
-    # B. STATS & TIJDLIJN (Naast elkaar)
+    # B. STATS & TIJDLIJN
     col_timeline, col_stats = st.columns([3, 2])
 
     with col_timeline:
         st.subheader("Wedstrijdverloop")
-        mask_tl = (df_events['action'].isin(['Goal', 'Own Goal', 'Card', 'Substitution'])) & ((df_events['result'] == 'Success') | (df_events['action'].isin(['Card', 'Substitution'])))
-        imp_events = df_events[mask_tl].copy()
+        
+        # FIX: Filter versoepeld. We checken niet meer op 'result' voor kaarten/wissels
+        # Dit zorgt dat ze zichtbaar worden, ook als result NULL is.
+        target_actions = ['Goal', 'Own Goal', 'Card', 'Yellow Card', 'Red Card', 'Substitution']
+        
+        imp_events = df_events[df_events['action'].isin(target_actions)].copy()
         
         if not imp_events.empty:
-            color_map = {"Goal": "#2ecc71", "Own Goal": "#e74c3c", "Card": "#f1c40f", "Substitution": "#3498db"}
+            # Kleuren mapping uitgebreid
+            color_map = {
+                "Goal": "#2ecc71", 
+                "Own Goal": "#e74c3c", 
+                "Card": "#f1c40f", 
+                "Yellow Card": "#f1c40f", 
+                "Red Card": "#c0392b",
+                "Substitution": "#3498db"
+            }
+            
             fig_tl = px.scatter(
                 imp_events, x="Minuut", y="Team", color="action", symbol="action",
-                hover_data=["Speler", "Tijd", "result"], size_max=15, color_discrete_map=color_map
+                hover_data=["Speler", "Tijd", "result"], size_max=15, 
+                color_discrete_map=color_map,
+                title="Tijdlijn (Goals, Kaarten, Wissels)"
             )
             fig_tl.update_traces(marker=dict(size=14, line=dict(width=1, color='DarkSlateGrey')))
             fig_tl.update_layout(height=400, legend=dict(orientation="h", y=1.1))
             st.plotly_chart(fig_tl, use_container_width=True)
         else:
-            st.info("Geen hoogtepunten in de tijdlijn.")
+            st.info("Geen hoogtepunten (Goals/Kaarten/Wissels) gevonden.")
 
     with col_stats:
         st.subheader("Statistieken")
-        # Draaitabel maken
         stats_counts = df_events.groupby(['Team', 'action']).size().reset_index(name='Aantal')
         stats_pivot = stats_counts.pivot(index='action', columns='Team', values='Aantal').fillna(0).astype(int)
         
-        # Sorteren op totaal aantal acties zodat de belangrijkste bovenaan staan
-        stats_pivot['Totaal'] = stats_pivot.sum(axis=1)
-        stats_pivot = stats_pivot.sort_values('Totaal', ascending=False).drop(columns='Totaal')
+        if not stats_pivot.empty:
+            stats_pivot['Totaal'] = stats_pivot.sum(axis=1)
+            stats_pivot = stats_pivot.sort_values('Totaal', ascending=False).drop(columns='Totaal')
         
         st.dataframe(stats_pivot, use_container_width=True)
 
@@ -261,5 +274,14 @@ with tab2:
         st.plotly_chart(fig, use_container_width=True)
     else: st.info("Geen events.")
 
+# -----------------------------------------------------------------------------
+# 5. RAW DATA
+# -----------------------------------------------------------------------------
 with tab3:
-    st.dataframe(df_events, use_container_width=True)
+    st.subheader("📋 Ruwe Data")
+    # Zorg dat de belangrijkste kolommen vooraan staan
+    cols = ['Volgorde', 'Minuut', 'Team', 'Speler', 'action', 'actionType', 'result']
+    # Voeg de overige kolommen toe die nog niet in cols staan
+    remaining = [c for c in df_events.columns if c not in cols]
+    
+    st.dataframe(df_events[cols + remaining], use_container_width=True)
