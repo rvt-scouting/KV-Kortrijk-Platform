@@ -74,7 +74,7 @@ def save_legacy_report(row_data, db_player_id=None, custom_player_name=None, sco
         # Datum parsen
         date_val = pd.to_datetime(row_data.get('DATE')).date()
         
-        # Advies Mapping
+        # --- 1. Advies Mapping ---
         raw_advies = str(row_data.get('Advies', '')).strip()
         advies_map = {
             "Future Sign": "Future sign",
@@ -92,9 +92,20 @@ def save_legacy_report(row_data, db_player_id=None, custom_player_name=None, sco
         if not tekst or tekst == 'nan':
             tekst = str(row_data.get('Scouting Notes', '')).strip()
 
-        # Positie
-        positie = str(row_data.get('Starting Position', '')).strip()
+        # --- 2. Positie Mapping (NIEUW) ---
+        raw_pos = str(row_data.get('Starting Position', '')).strip()
         
+        # Vertaallijst voor afkortingen die de DB niet kent
+        position_map = {
+            "WBL": "LB",
+            "WBR": "RB",
+            # Eventueel andere die je tegenkomt:
+            "CDM": "DM",
+            "CAM": "AM"
+        }
+        # Als hij in de map staat, pak de vertaling, anders de originele waarde
+        positie = position_map.get(raw_pos, raw_pos)
+
         # LOGICA: ID of Custom Naam?
         val_speler_id = db_player_id
         val_custom_naam = custom_player_name
@@ -193,6 +204,7 @@ else:
         st.info(f"**Speler:** {legacy_player_name}")
         st.write(f"**Team (Excel):** {row.get('Team')}")
         st.write(f"**Datum:** {row.get('DATE')}")
+        st.write(f"**Positie:** {row.get('Starting Position')}")
         
         scout_email = str(row.get('SCOUT')).lower().strip()
         found_scout_id = st.session_state.scout_map.get(scout_email)
