@@ -103,12 +103,13 @@ else:
     # --- NIVEAU 2: COACHES ---
     elif lvl == 2:
         # Coaches zien direct hun wedstrijd analyses
+        
         pages["Performance"] = [pg_match]
 
     # --- NIVEAU 3: MANAGEMENT / ADMIN ---
     elif lvl >= 3:
         # 1. Hoofd Analyse (De kern)
-        pages["🔍 Hoofd Analyse"] = [pg_player_analysis, pg_team_analysis]
+        pages["🔍 Hoofd Analyse"] = [pg_kvk, pg_player_analysis, pg_team_analysis]
         
         # 2. Scouting & Markt
         pages["Scouting & Markt"] = [pg_dashboard, pg_scout, pg_shortlists, pg_offer, pg_disc]
