@@ -5,7 +5,7 @@ from utils import run_query, init_connection
 st.set_page_config(page_title="Legacy Data Import", page_icon="🏗️", layout="wide")
 
 st.title("🏗️ Legacy Data Import Tool")
-st.markdown("Slimme import tool: leert van je keuzes om dubbele namen automatisch te verwerken.")
+st.markdown("Slimme import tool: koppel aan DB of maak automatisch custom spelers aan.")
 
 # -----------------------------------------------------------------------------
 # 0. INITIALISATIE SESSION STATE
@@ -55,44 +55,37 @@ def search_players_fuzzy(name_part):
     term = f"%{search_term}%"
     return run_query(query, params=(term, term))
 
-def save_legacy_report(row_data, db_player_id, scout_id):
-    """Slaat het rapport op in de database"""
+def save_legacy_report(row_data, db_player_id=None, custom_player_name=None, scout_id=None):
+    """
+    Slaat het rapport op. 
+    Accepteert OF db_player_id (integer) OF custom_player_name (string).
+    """
     conn = None
     try:
         conn = init_connection()
         cur = conn.cursor()
         
-        # Rating omzetten (1-5 naar 1-10)
+        # Rating omzetten
         rating_raw = pd.to_numeric(row_data.get('Match Rating'), errors='coerce')
         rating = int(rating_raw * 2) if not pd.isna(rating_raw) else None
         
         # Datum parsen
         date_val = pd.to_datetime(row_data.get('DATE')).date()
         
-        # --- FIX: Advies Mapping ---
+        # Advies Mapping
         raw_advies = str(row_data.get('Advies', '')).strip()
-        
-        # Hier vertalen we de Excel termen naar Database termen
         advies_map = {
-            "Future Sign": "Future sign",  # De specifieke fix die je vroeg
-            "Sign": "Sign",                # Voor de zekerheid
-            "Follow": "Follow",            # Voor de zekerheid
-            "Not": "Not",                  # Voor de zekerheid
-            "nan": None,
-            "": None
+            "Future Sign": "Future sign",
+            "Sign": "Sign", "Follow": "Follow", "Not": "Not",
+            "nan": None, "": None
         }
-        
-        # Pak de vertaling, of als die niet bestaat, pak de originele waarde
         advies = advies_map.get(raw_advies, raw_advies)
         
-        # --- FIX: Profiel Code naar kleine letters ---
+        # Profiel Code (Lower)
         raw_prof = str(row_data.get('Profile', '')).strip()
-        if raw_prof == 'nan' or not raw_prof:
-            profiel = None
-        else:
-            profiel = raw_prof.lower() 
+        profiel = raw_prof.lower() if raw_prof and raw_prof != 'nan' else None
 
-        # Tekst (Check beide kolommen)
+        # Tekst
         tekst = str(row_data.get('Resume', '')).strip()
         if not tekst or tekst == 'nan':
             tekst = str(row_data.get('Scouting Notes', '')).strip()
@@ -100,15 +93,22 @@ def save_legacy_report(row_data, db_player_id, scout_id):
         # Positie
         positie = str(row_data.get('Starting Position', '')).strip()
         
+        # LOGICA: ID of Custom Naam?
+        # Als db_player_id is meegegeven -> speler_id vullen, custom NULL
+        # Als custom_player_name is meegegeven -> speler_id NULL, custom vullen
+        
+        val_speler_id = db_player_id
+        val_custom_naam = custom_player_name
+        
         # Insert Query
         q = """
             INSERT INTO scouting.rapporten 
-            (scout_id, speler_id, positie_gespeeld, beoordeling, advies, 
+            (scout_id, speler_id, custom_speler_naam, positie_gespeeld, beoordeling, advies, 
              profiel_code, rapport_tekst, aangemaakt_op, custom_wedstrijd_naam)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'Legacy Import')
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'Legacy Import')
         """
         cur.execute(q, (
-            scout_id, db_player_id, positie, rating, advies, 
+            scout_id, val_speler_id, val_custom_naam, positie, rating, advies, 
             profiel, tekst, date_val
         ))
         
@@ -168,15 +168,21 @@ else:
     legacy_player_name = str(row.get('Player')).strip()
 
     # --- AUTO-PROCESS LOGICA ---
-    # Als we deze speler al eens gematched hebben, sla direct op en ga door!
+    # Check of we deze speler al kennen in de mapping
     if legacy_player_name in st.session_state.player_map:
-        mapped_id = st.session_state.player_map[legacy_player_name]
+        mapped_val = st.session_state.player_map[legacy_player_name]
         
-        # Scout ID ophalen (moeten we wel elke keer checken want kan andere scout zijn)
+        # Scout ID ophalen
         scout_email = str(row.get('SCOUT')).lower().strip()
-        scout_id = st.session_state.scout_map.get(scout_email, 1) # Default 1 als niet gevonden
+        scout_id = st.session_state.scout_map.get(scout_email, 1) 
         
-        if save_legacy_report(row, mapped_id, scout_id):
+        # Check: Is het een ID (int) of een Custom Naam (str)?
+        is_db_id = isinstance(mapped_val, int)
+        
+        db_id = mapped_val if is_db_id else None
+        cust_name = mapped_val if not is_db_id else None
+        
+        if save_legacy_report(row, db_player_id=db_id, custom_player_name=cust_name, scout_id=scout_id):
             st.session_state.current_index += 1
             st.rerun()
     
@@ -188,14 +194,10 @@ else:
     
     # A. BRON DATA
     with col_source:
-        st.subheader("📄 Bron Data (Excel)")
+        st.subheader("📄 Bron Data")
         st.info(f"**Speler:** {legacy_player_name}")
         st.write(f"**Team:** {row.get('Team')}")
         st.write(f"**Datum:** {row.get('DATE')}")
-        
-        # Profiel & Advies tonen ter controle
-        st.write(f"**Profiel:** {row.get('Profile')}")
-        st.write(f"**Advies:** {row.get('Advies')}")
         
         scout_email = str(row.get('SCOUT')).lower().strip()
         found_scout_id = st.session_state.scout_map.get(scout_email)
@@ -203,8 +205,8 @@ else:
         if found_scout_id:
             st.success(f"✅ Scout ID: {found_scout_id}")
         else:
-            st.warning(f"⚠️ Scout '{scout_email}' onbekend! (Default: 1)")
-            found_scout_id = st.text_input("Voer manueel Scout ID in:", value="1")
+            st.warning(f"⚠️ Scout onbekend (Default: 1)")
+            found_scout_id = st.text_input("Scout ID:", value="1")
 
         txt = str(row.get('Resume'))
         if txt == 'nan': txt = str(row.get('Scouting Notes'))
@@ -213,33 +215,45 @@ else:
     # B. MATCHING
     with col_match:
         st.subheader("🔍 Zoek & Koppel")
-        st.caption("Eerste keer voor deze speler. Volgende keren gaat automatisch.")
         
         parsed_name, _ = parse_legacy_player_string(legacy_player_name)
         search_query = st.text_input("Zoekterm", value=parsed_name, key=f"search_{idx}")
         results = search_players_fuzzy(search_query)
         
+        # OPTIE 1: DATABASE MATCHES
         if not results.empty:
-            st.write("Resultaten:")
+            st.write("Database Resultaten:")
             for _, db_row in results.iterrows():
                 c1, c2, c3 = st.columns([3, 2, 2])
                 with c1: st.write(f"**{db_row['commonname']}**")
-                with c2: st.caption(f"{db_row['firstname']} {db_row['lastname']} ({db_row['birthdate']})")
+                with c2: st.caption(f"{db_row['firstname']} {db_row['lastname']}")
                 with c3:
-                    if st.button("Koppel & Opslaan", key=f"link_{db_row['id']}", type="primary"):
-                        # 1. SLA MAPPING OP IN GEHEUGEN
-                        st.session_state.player_map[legacy_player_name] = db_row['id']
+                    if st.button("🔗 Koppel", key=f"link_{db_row['id']}", type="primary"):
+                        # Save mapping as INT (Database ID)
+                        st.session_state.player_map[legacy_player_name] = int(db_row['id'])
                         
-                        # 2. SLA RAPPORT OP
-                        if save_legacy_report(row, db_row['id'], found_scout_id):
+                        if save_legacy_report(row, db_player_id=int(db_row['id']), scout_id=found_scout_id):
                             st.session_state.current_index += 1
                             st.rerun()
             st.markdown("---")
         else:
             st.warning("Geen directe matches gevonden.")
 
-        c_skip, c_next = st.columns(2)
-        with c_skip:
-            if st.button("⏭️ Overslaan", key=f"skip_{idx}"):
-                st.session_state.current_index += 1
-                st.rerun()
+        # OPTIE 2: CUSTOM SPELER (NIEUW)
+        with st.expander("➕ Speler niet gevonden? Maak Custom aan", expanded=True):
+            st.write("Sla op als 'Custom Speler' (zonder ID).")
+            custom_name_input = st.text_input("Naam voor rapport:", value=legacy_player_name, key=f"cust_{idx}")
+            
+            if st.button("💾 Opslaan als Custom Speler", key=f"btn_cust_{idx}"):
+                # Save mapping as STRING (Custom Name)
+                st.session_state.player_map[legacy_player_name] = custom_name_input
+                
+                if save_legacy_report(row, custom_player_name=custom_name_input, scout_id=found_scout_id):
+                    st.session_state.current_index += 1
+                    st.rerun()
+
+        # SKIP OPTIE
+        st.markdown("---")
+        if st.button("⏭️ Overslaan", key=f"skip_{idx}"):
+            st.session_state.current_index += 1
+            st.rerun()
