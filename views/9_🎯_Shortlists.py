@@ -42,25 +42,30 @@ def execute_command(query, params=None):
 c1, c2 = st.columns([3, 1])
 
 with c1:
-    # Haal lijsten op + Eigenaar naam
+    # --- AANPASSING: LOGICA LEVEL 1 (Enkel eigen lijsten) ---
     try:
-        q_lists = """
+        base_query = """
             SELECT s.id, s.naam, u.naam as eigenaar 
             FROM scouting.shortlists s
             LEFT JOIN scouting.gebruikers u ON s.eigenaar_id = u.id
-            ORDER BY s.id
         """
-        df_lists = run_query(q_lists)
+        
+        # Als Level 1 (Scout), filter op eigen ID
+        if lvl == 1:
+            q_lists = base_query + " WHERE s.eigenaar_id = %s ORDER BY s.id"
+            df_lists = run_query(q_lists, params=(current_user_id,))
+        else:
+            # Level 2/3 ziet alles
+            q_lists = base_query + " ORDER BY s.id"
+            df_lists = run_query(q_lists)
         
         if not df_lists.empty:
-            # We tonen nu ook van wie de lijst is in de dropdown
             list_opts = {f"{row['naam']} (Eigenaar: {row['eigenaar'] or 'Onbekend'})": row['id'] for _, row in df_lists.iterrows()}
             selected_label = st.selectbox("📂 Selecteer Shortlist:", list(list_opts.keys()))
             selected_list_id = list_opts[selected_label]
-            # Haal de pure naam eruit voor de titel straks
             selected_list_pure_name = selected_label.split(" (")[0]
         else:
-            st.info("Nog geen shortlists beschikbaar.")
+            st.info("Geen shortlists gevonden.")
             selected_list_id = None
             selected_list_pure_name = ""
     except Exception as e:
@@ -74,14 +79,10 @@ with c2:
             st.write("**Nieuwe Lijst Configureren**")
             new_list_name = st.text_input("Naam lijst", placeholder="bv. Keepers Zomer '25")
             
-            # --- NIEUW: KIES EIGENAAR ---
-            # Haal alle gebruikers op om uit te kiezen
             try:
                 users_df = run_query("SELECT id, naam FROM scouting.gebruikers WHERE actief = true ORDER BY naam")
                 if not users_df.empty:
                     user_dict = {row['naam']: row['id'] for _, row in users_df.iterrows()}
-                    
-                    # Probeer standaard de huidige gebruiker te selecteren
                     default_idx = 0
                     if current_user_name in user_dict:
                         default_idx = list(user_dict.keys()).index(current_user_name)
@@ -89,16 +90,15 @@ with c2:
                     assigned_owner_name = st.selectbox("Toewijzen aan:", list(user_dict.keys()), index=default_idx)
                     assigned_owner_id = user_dict[assigned_owner_name]
                 else:
-                    assigned_owner_id = current_user_id # Fallback
+                    assigned_owner_id = current_user_id
             except:
                 assigned_owner_id = current_user_id
 
             if st.button("Aanmaken"):
                 if new_list_name:
                     q = "INSERT INTO scouting.shortlists (naam, eigenaar_id, aangemaakt_op) VALUES (%s, %s, NOW())"
-                    # We gebruiken nu assigned_owner_id
                     if execute_command(q, (new_list_name, assigned_owner_id)):
-                        st.success(f"Lijst '{new_list_name}' gemaakt voor {assigned_owner_name}!")
+                        st.success(f"Lijst '{new_list_name}' gemaakt!")
                         st.cache_data.clear()
                         st.rerun()
 
@@ -120,20 +120,28 @@ if selected_list_id:
             search_txt = st.text_input("🔍 Zoek speler (Database)", placeholder="Naam...")
             found_pid = None
             found_pname = None
+            found_pos = None # Nieuw: Positie opslaan
             
             if len(search_txt) > 2:
-                res = run_query("""
-                    SELECT p.id, p.commonname, sq.name as team 
+                # --- AANPASSING: Positie ophalen uit analysis data ---
+                q_search = """
+                    SELECT p.id, p.commonname, sq.name as team,
+                           (SELECT position FROM analysis.final_impect_scores 
+                            WHERE "playerId" = p.id 
+                            ORDER BY "iterationId" DESC LIMIT 1) as found_pos
                     FROM public.players p 
                     LEFT JOIN public.squads sq ON p."currentSquadId" = sq.id
                     WHERE p.commonname ILIKE %s LIMIT 10
-                """, (f"%{search_txt}%",))
+                """
+                res = run_query(q_search, (f"%{search_txt}%",))
                 
                 if not res.empty:
-                    opts = {f"{r['commonname']} ({r['team'] or '?'})": r['id'] for _, r in res.iterrows()}
+                    opts = {f"{r['commonname']} ({r['team'] or '?'}) - {r['found_pos'] or '?'}": r['id'] for _, r in res.iterrows()}
                     sel = st.radio("Resultaten:", list(opts.keys()))
                     found_pid = opts[sel]
                     found_pname = sel.split(" (")[0]
+                    # Haal positie uit resultaat dataframe
+                    found_pos = res[res['id'] == found_pid].iloc[0]['found_pos']
                 else:
                     st.warning("Geen speler gevonden.")
             
@@ -145,6 +153,10 @@ if selected_list_id:
             with st.form("add_entry_form"):
                 final_pid = None
                 final_custom = None
+                default_pos_index = 0
+                
+                # POSITIE LIJST VOOR DROPDOWN
+                pos_options = ["Doelman", "Verdediger", "Middenvelder", "Aanvaller", "CV", "RB", "LB", "CVM", "CM", "CAM", "RW", "LW", "SPITS"]
                 
                 if use_manual:
                     final_custom = st.text_input("Naam Speler (Handmatig)")
@@ -152,14 +164,20 @@ if selected_list_id:
                 elif found_pid:
                     st.success(f"Geselecteerd: **{found_pname}**")
                     final_pid = found_pid
+                    # Probeer gevonden positie te matchen met dropdown
+                    if found_pos and found_pos in pos_options:
+                        default_pos_index = pos_options.index(found_pos)
                 else:
                     st.info("👈 Zoek en selecteer eerst een speler links.")
 
-                c_prio, c_note = st.columns(2)
+                c_pos, c_prio = st.columns(2)
+                with c_pos:
+                    # --- AANPASSING: Positie veld ---
+                    final_position = st.selectbox("Positie", pos_options, index=default_pos_index)
                 with c_prio:
                     prio = st.selectbox("Prioriteit", ["High", "Medium", "Low"], index=1)
-                with c_note:
-                    notes = st.text_input("Korte notitie", placeholder="bv. Contract loopt af")
+                
+                notes = st.text_input("Korte notitie", placeholder="bv. Contract loopt af")
                 
                 if st.form_submit_button("Toevoegen aan Lijst"):
                     if final_pid or final_custom:
@@ -172,14 +190,16 @@ if selected_list_id:
                         if not dup_check.empty:
                             st.error("Deze speler staat al op de lijst!")
                         else:
+                            # --- AANPASSING: Insert met position ---
                             q_ins = """
                                 INSERT INTO scouting.shortlist_entries 
-                                (shortlist_id, player_id, custom_naam, priority, notities, added_by)
-                                VALUES (%s, %s, %s, %s, %s, %s)
+                                (shortlist_id, player_id, custom_naam, position, priority, notities, added_by)
+                                VALUES (%s, %s, %s, %s, %s, %s, %s)
                             """
-                            if execute_command(q_ins, (selected_list_id, final_pid, final_custom, prio, notes, current_user_name)):
+                            if execute_command(q_ins, (selected_list_id, final_pid, final_custom, final_position, prio, notes, current_user_name)):
                                 st.success("Toegevoegd!")
                                 st.cache_data.clear()
+                                st.rerun()
                     else:
                         st.warning("Selecteer een speler of vul een naam in.")
 
@@ -187,12 +207,13 @@ if selected_list_id:
     # TAB 2: LIJST BEKIJKEN
     # =========================================================================
     with tab2:
-        # Haal entries op (Met Type Cast fix!)
+        # --- AANPASSING: Selecteer positie ---
         q_entries = """
             SELECT 
                 e.id,
                 COALESCE(p.commonname, e.custom_naam) as "Naam",
                 sq.name as "Huidig Team",
+                e.position as "Positie",
                 p.birthdate as "Geboortedatum",
                 e.priority as "Prio",
                 e.notities as "Notitie",
@@ -221,9 +242,10 @@ if selected_list_id:
                         "id": None,
                         "Geboortedatum": st.column_config.DateColumn(format="DD-MM-YYYY"),
                         "Datum": st.column_config.DatetimeColumn(format="DD-MM-YYYY"),
-                        "Prio": st.column_config.SelectboxColumn("Prio", options=["High", "Medium", "Low"], required=True)
+                        "Prio": st.column_config.SelectboxColumn("Prio", options=["High", "Medium", "Low"], required=True),
+                        "Positie": st.column_config.TextColumn("Positie") # Toon positie
                     },
-                    disabled=["Naam", "Huidig Team", "Geboortedatum", "Door", "Datum"],
+                    disabled=["Naam", "Huidig Team", "Geboortedatum", "Door", "Datum", "Positie"],
                     key="shortlist_editor"
                 )
 
@@ -250,7 +272,7 @@ if selected_list_id:
                             st.cache_data.clear()
                             st.rerun()
             else:
-                # NIVEAU 1 (Scouts)
+                # NIVEAU 1 (Scouts) - Read Only
                 def color_prio(val):
                     c = "#c0392b" if val == "High" else "#f39c12" if val == "Medium" else "#27ae60"
                     return f'color: {c}; font-weight: bold'
