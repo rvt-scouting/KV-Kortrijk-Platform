@@ -56,7 +56,7 @@ def test_page_func():
 pg_home = st.Page(welcome, title="Home", icon="🏠")
 pg_profile = st.Page(test_page_func, title="Mijn Profiel", icon="👤")
 
-# HOOFD ANALYSE (GESPLITST)
+# HOOFD ANALYSE
 pg_kvk = st.Page("views/11_🔴_KV_Kortrijk.py", title="KV Kortrijk", icon="🔴")
 pg_player_analysis = st.Page("views/1_⚽_Spelers.py", title="Spelers Analyse", icon="⚽")
 pg_team_analysis = st.Page("views/10_🛡️_Teams.py", title="Team Analyse", icon="🛡️")
@@ -74,7 +74,6 @@ pg_coach = st.Page("views/2_👔_Coaches.py", title="Coach Profielen", icon="�
 
 # Admin & Tools Module
 pg_admin = st.Page("views/8_⚙️_Admin.py", title="Admin Beheer", icon="⚙️")
-# --- NIEUWE PAGINA ---
 pg_import = st.Page("views/import_tool.py", title="Legacy Import Tool", icon="🏗️")
 
 # -----------------------------------------------------------------------------
@@ -99,8 +98,9 @@ else:
     
     # --- NIVEAU 1: SCOUTS ---
     if lvl == 1:
-        # Scouts zien direct hun input tools
-        pages["Scouting"] = [pg_scout, pg_shortlists]
+        # Scouts zien hun tools + de import tool
+        # TOEGEVOEGD: pg_import aan de lijst
+        pages["Scouting"] = [pg_scout, pg_shortlists, pg_import]
 
     # --- NIVEAU 2: COACHES ---
     elif lvl == 2:
@@ -109,7 +109,7 @@ else:
 
     # --- NIVEAU 3: MANAGEMENT / ADMIN ---
     elif lvl >= 3:
-        # 1. Hoofd Analyse (De kern)
+        # 1. Hoofd Analyse
         pages["🔍 Hoofd Analyse"] = [pg_kvk, pg_player_analysis, pg_team_analysis]
         
         # 2. Scouting & Markt
@@ -118,7 +118,7 @@ else:
         # 3. Overige Data
         pages["Performance Data"] = [pg_match, pg_coach]
         
-        # 4. Beheer (HIER IS DE IMPORT TOOL TOEGEVOEGD)
+        # 4. Beheer (Inclusief Import Tool)
         pages["Beheer"] = [pg_admin, pg_import]
 
     # START DE NAVIGATIE
