@@ -5,7 +5,7 @@ from utils import run_query, init_connection
 st.set_page_config(page_title="Legacy Data Import", page_icon="🏗️", layout="wide")
 
 st.title("🏗️ Legacy Data Import Tool")
-st.markdown("Upload oude Excel/CSV exports en koppel ze manueel aan de juiste database spelers.")
+st.markdown("Slimme import tool: leert van je keuzes om dubbele namen automatisch te verwerken.")
 
 # -----------------------------------------------------------------------------
 # 0. INITIALISATIE SESSION STATE
@@ -13,6 +13,8 @@ st.markdown("Upload oude Excel/CSV exports en koppel ze manueel aan de juiste da
 if 'import_df' not in st.session_state: st.session_state.import_df = None
 if 'current_index' not in st.session_state: st.session_state.current_index = 0
 if 'scout_map' not in st.session_state: st.session_state.scout_map = {}
+# NIEUW: Dit woordenboek onthoudt je keuzes (bv: "I. Halifa..." -> ID 104)
+if 'player_map' not in st.session_state: st.session_state.player_map = {}
 
 # -----------------------------------------------------------------------------
 # 1. HULPFUNCTIES
@@ -40,13 +42,11 @@ def search_players_fuzzy(name_part):
     """Zoekt in DB op basis van naam (flexibel)"""
     if not name_part or len(name_part) < 2: return pd.DataFrame()
     
-    # Probeer achternaam te isoleren voor betere search
-    # bv. "I. Halifa" -> zoek op "Halifa"
+    # Probeer achternaam te isoleren
     search_term = name_part
     if "." in name_part:
         search_term = name_part.split('.')[-1].strip()
     
-    # FIX: Column name is 'birthdate', niet 'birthday'
     query = """
         SELECT id, commonname, firstname, lastname, birthdate
         FROM public.players 
@@ -73,7 +73,11 @@ def save_legacy_report(row_data, db_player_id, scout_id):
         # Advies
         advies = str(row_data.get('Advies', '')).strip()
         
-        # Tekst
+        # NIEUW: Profiel Code
+        profiel = str(row_data.get('Profile', '')).strip()
+        if profiel == 'nan': profiel = None
+
+        # Tekst (Check beide kolommen)
         tekst = str(row_data.get('Resume', '')).strip()
         if not tekst or tekst == 'nan':
             tekst = str(row_data.get('Scouting Notes', '')).strip()
@@ -85,11 +89,12 @@ def save_legacy_report(row_data, db_player_id, scout_id):
         q = """
             INSERT INTO scouting.rapporten 
             (scout_id, speler_id, positie_gespeeld, beoordeling, advies, 
-             rapport_tekst, aangemaakt_op, custom_wedstrijd_naam)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, 'Legacy Import')
+             profiel_code, rapport_tekst, aangemaakt_op, custom_wedstrijd_naam)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'Legacy Import')
         """
         cur.execute(q, (
-            scout_id, db_player_id, positie, rating, advies, tekst, date_val
+            scout_id, db_player_id, positie, rating, advies, 
+            profiel, tekst, date_val
         ))
         
         conn.commit()
@@ -133,7 +138,7 @@ else:
     df = st.session_state.import_df
     idx = st.session_state.current_index
     
-    # Check of we klaar zijn
+    # Check Einde
     if idx >= len(df):
         st.balloons()
         st.success("✅ Import Voltooid! Alle rijen zijn verwerkt.")
@@ -143,63 +148,72 @@ else:
             st.rerun()
         st.stop()
         
-    # Huidige rij ophalen
+    # Huidige rij
     row = df.iloc[idx]
+    legacy_player_name = str(row.get('Player')).strip()
+
+    # --- AUTO-PROCESS LOGICA ---
+    # Als we deze speler al eens gematched hebben, sla direct op en ga door!
+    if legacy_player_name in st.session_state.player_map:
+        mapped_id = st.session_state.player_map[legacy_player_name]
+        
+        # Scout ID ophalen (moeten we wel elke keer checken want kan andere scout zijn)
+        scout_email = str(row.get('SCOUT')).lower().strip()
+        scout_id = st.session_state.scout_map.get(scout_email, 1) # Default 1 als niet gevonden
+        
+        if save_legacy_report(row, mapped_id, scout_id):
+            st.session_state.current_index += 1
+            # We herladen direct om de volgende rij te pakken
+            st.rerun()
     
-    # Progress Bar
+    # --- UI LAYOUT (ALLEEN ALS NIET AUTOMATISCH GEMATCHED) ---
     progress = (idx / len(df))
     st.progress(progress, text=f"Bezig met rij {idx + 1} van {len(df)}")
     
-    # --- UI LAYOUT ---
     col_source, col_match = st.columns([1, 2])
     
-    # A. BRON DATA (LINKERKANT)
+    # A. BRON DATA
     with col_source:
         st.subheader("📄 Bron Data (Excel)")
-        st.info(f"**Speler:** {row.get('Player')}")
-        st.write(f"**Team (Excel):** {row.get('Team')}")
-        st.write(f"**Positie:** {row.get('Starting Position')}")
+        st.info(f"**Speler:** {legacy_player_name}")
+        st.write(f"**Team:** {row.get('Team')}")
         st.write(f"**Datum:** {row.get('DATE')}")
+        st.write(f"**Profiel:** {row.get('Profile')}")
         
-        # Scout Check
         scout_email = str(row.get('SCOUT')).lower().strip()
         found_scout_id = st.session_state.scout_map.get(scout_email)
         
         if found_scout_id:
-            st.success(f"✅ Scout herkend (ID: {found_scout_id})")
+            st.success(f"✅ Scout ID: {found_scout_id}")
         else:
-            st.warning(f"⚠️ Scout '{scout_email}' onbekend!")
+            st.warning(f"⚠️ Scout '{scout_email}' onbekend! (Default: 1)")
             found_scout_id = st.text_input("Voer manueel Scout ID in:", value="1")
 
-        # Tekst preview
         txt = str(row.get('Resume'))
         if txt == 'nan': txt = str(row.get('Scouting Notes'))
-        with st.expander("Lees rapport tekst"):
-            st.write(txt)
+        with st.expander("Lees tekst"): st.write(txt)
 
-    # B. MATCHING (RECHTERKANT)
+    # B. MATCHING
     with col_match:
-        st.subheader("🔍 Zoek in Database")
+        st.subheader("🔍 Zoek & Koppel")
+        st.caption("Eerste keer voor deze speler. Volgende keren gaat automatisch.")
         
-        # Naam parsen
-        parsed_name, parsed_team = parse_legacy_player_string(row.get('Player'))
-        
-        # Zoekbalk (standaard ingevuld met geparsde naam)
+        parsed_name, _ = parse_legacy_player_string(legacy_player_name)
         search_query = st.text_input("Zoekterm", value=parsed_name, key=f"search_{idx}")
-        
-        # Resultaten ophalen
         results = search_players_fuzzy(search_query)
         
         if not results.empty:
             st.write("Resultaten:")
             for _, db_row in results.iterrows():
-                # Card voor elke speler
                 c1, c2, c3 = st.columns([3, 2, 2])
                 with c1: st.write(f"**{db_row['commonname']}**")
                 with c2: st.caption(f"{db_row['firstname']} {db_row['lastname']} ({db_row['birthdate']})")
                 with c3:
-                    # DE KNOP: Koppelen en Opslaan
                     if st.button("Koppel & Opslaan", key=f"link_{db_row['id']}", type="primary"):
+                        # 1. SLA MAPPING OP IN GEHEUGEN
+                        st.session_state.player_map[legacy_player_name] = db_row['id']
+                        
+                        # 2. SLA RAPPORT OP
                         if save_legacy_report(row, db_row['id'], found_scout_id):
                             st.session_state.current_index += 1
                             st.rerun()
@@ -207,9 +221,8 @@ else:
         else:
             st.warning("Geen directe matches gevonden.")
 
-        # SKIP OPTIE
         c_skip, c_next = st.columns(2)
         with c_skip:
-            if st.button("⏭️ Overslaan (Niet importeren)", key=f"skip_{idx}"):
+            if st.button("⏭️ Overslaan", key=f"skip_{idx}"):
                 st.session_state.current_index += 1
                 st.rerun()
