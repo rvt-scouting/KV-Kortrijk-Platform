@@ -73,9 +73,12 @@ def save_legacy_report(row_data, db_player_id, scout_id):
         # Advies
         advies = str(row_data.get('Advies', '')).strip()
         
-        # NIEUW: Profiel Code
-        profiel = str(row_data.get('Profile', '')).strip()
-        if profiel == 'nan': profiel = None
+# NIEUW: Profiel Code (Fix: Forceer kleine letters)
+        raw_prof = str(row_data.get('Profile', '')).strip()
+        if raw_prof == 'nan' or not raw_prof:
+            profiel = None
+        else:
+            profiel = raw_prof.lower() # <-- Hier maken we er '8b' van
 
         # Tekst (Check beide kolommen)
         tekst = str(row_data.get('Resume', '')).strip()
