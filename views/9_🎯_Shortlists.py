@@ -42,7 +42,6 @@ def execute_command(query, params=None):
 c1, c2 = st.columns([3, 1])
 
 with c1:
-    # --- AANPASSING: LOGICA LEVEL 1 (Enkel eigen lijsten) ---
     try:
         base_query = """
             SELECT s.id, s.naam, u.naam as eigenaar 
@@ -105,7 +104,10 @@ with c2:
 st.divider()
 
 if selected_list_id:
-    tab1, tab2 = st.tabs(["➕ Speler Toevoegen", "📋 Lijst Bekijken"])
+    tab1, tab2 = st.tabs(["➕ Speler Toevoegen", "📋 Lijst Bekijken & Bewerken"])
+
+    # LIJST MET POSITIES (Gebruikt in beide tabs)
+    pos_options = ["GK","CB", "RB", "LB", "DM", "CM", "ACM", "RW", "LW", "FW"]
 
     # =========================================================================
     # TAB 1: SPELER TOEVOEGEN
@@ -120,10 +122,9 @@ if selected_list_id:
             search_txt = st.text_input("🔍 Zoek speler (Database)", placeholder="Naam...")
             found_pid = None
             found_pname = None
-            found_pos = None # Nieuw: Positie opslaan
+            found_pos = None 
             
             if len(search_txt) > 2:
-                # --- AANPASSING: Positie ophalen uit analysis data ---
                 q_search = """
                     SELECT p.id, p.commonname, sq.name as team,
                            (SELECT position FROM analysis.final_impect_scores 
@@ -140,7 +141,6 @@ if selected_list_id:
                     sel = st.radio("Resultaten:", list(opts.keys()))
                     found_pid = opts[sel]
                     found_pname = sel.split(" (")[0]
-                    # Haal positie uit resultaat dataframe
                     found_pos = res[res['id'] == found_pid].iloc[0]['found_pos']
                 else:
                     st.warning("Geen speler gevonden.")
@@ -155,16 +155,12 @@ if selected_list_id:
                 final_custom = None
                 default_pos_index = 0
                 
-                # POSITIE LIJST VOOR DROPDOWN
-                pos_options = ["Doelman", "Verdediger", "Middenvelder", "Aanvaller", "CV", "RB", "LB", "CVM", "CM", "CAM", "RW", "LW", "SPITS"]
-                
                 if use_manual:
                     final_custom = st.text_input("Naam Speler (Handmatig)")
                     st.caption("Gebruik dit voor spelers die nog niet in onze datafeed zitten.")
                 elif found_pid:
                     st.success(f"Geselecteerd: **{found_pname}**")
                     final_pid = found_pid
-                    # Probeer gevonden positie te matchen met dropdown
                     if found_pos and found_pos in pos_options:
                         default_pos_index = pos_options.index(found_pos)
                 else:
@@ -172,7 +168,6 @@ if selected_list_id:
 
                 c_pos, c_prio = st.columns(2)
                 with c_pos:
-                    # --- AANPASSING: Positie veld ---
                     final_position = st.selectbox("Positie", pos_options, index=default_pos_index)
                 with c_prio:
                     prio = st.selectbox("Prioriteit", ["High", "Medium", "Low"], index=1)
@@ -190,7 +185,6 @@ if selected_list_id:
                         if not dup_check.empty:
                             st.error("Deze speler staat al op de lijst!")
                         else:
-                            # --- AANPASSING: Insert met position ---
                             q_ins = """
                                 INSERT INTO scouting.shortlist_entries 
                                 (shortlist_id, player_id, custom_naam, position, priority, notities, added_by)
@@ -204,10 +198,9 @@ if selected_list_id:
                         st.warning("Selecteer een speler of vul een naam in.")
 
     # =========================================================================
-    # TAB 2: LIJST BEKIJKEN
+    # TAB 2: LIJST BEKIJKEN & BEWERKEN
     # =========================================================================
     with tab2:
-        # --- AANPASSING: Selecteer positie ---
         q_entries = """
             SELECT 
                 e.id,
@@ -231,9 +224,17 @@ if selected_list_id:
         
         if not df_entries.empty:
             
-            # Managers (Niveau 3) mogen bewerken
-            if lvl >= 3:
-                st.info("💡 Bewerk prioriteit of notities direct in de tabel.")
+            # Level 3 (Management) kan alles bewerken
+            # Level 1 (Scouts) kunnen alleen bewerken als ze eigenaar zijn (in theorie, hier staat nu lvl >= 3 voor edit)
+            # Aangezien Scouts alleen hun EIGEN lijsten zien (zie filter bovenaan), 
+            # kunnen we overwegen om Scouts ook te laten editen in hun eigen lijst.
+            # Voor nu houd ik de code consistent met je vorige logica (lvl >= 3), 
+            # maar je kan dit veranderen naar `if lvl >= 1:` als scouts ook mogen editen.
+            
+            can_edit = lvl >= 3 # Pas aan naar lvl >= 1 als scouts ook mogen editen
+            
+            if can_edit:
+                st.info("💡 Bewerk Positie, Prioriteit of Notities direct in de tabel.")
                 edited_df = st.data_editor(
                     df_entries,
                     use_container_width=True,
@@ -243,9 +244,11 @@ if selected_list_id:
                         "Geboortedatum": st.column_config.DateColumn(format="DD-MM-YYYY"),
                         "Datum": st.column_config.DatetimeColumn(format="DD-MM-YYYY"),
                         "Prio": st.column_config.SelectboxColumn("Prio", options=["High", "Medium", "Low"], required=True),
-                        "Positie": st.column_config.TextColumn("Positie") # Toon positie
+                        # --- AANPASSING: POSITIE IS NU EEN DROPDOWN ---
+                        "Positie": st.column_config.SelectboxColumn("Positie", options=pos_options), 
                     },
-                    disabled=["Naam", "Huidig Team", "Geboortedatum", "Door", "Datum", "Positie"],
+                    # --- AANPASSING: Positie uit disabled gehaald ---
+                    disabled=["Naam", "Huidig Team", "Geboortedatum", "Door", "Datum"],
                     key="shortlist_editor"
                 )
 
@@ -254,10 +257,17 @@ if selected_list_id:
                     if changes:
                         for idx, row_changes in changes.items():
                             rec_id = df_entries.iloc[idx]['id']
+                            
                             if "Prio" in row_changes:
                                 execute_command("UPDATE scouting.shortlist_entries SET priority = %s WHERE id = %s", (row_changes["Prio"], int(rec_id)))
+                            
                             if "Notitie" in row_changes:
                                 execute_command("UPDATE scouting.shortlist_entries SET notities = %s WHERE id = %s", (row_changes["Notitie"], int(rec_id)))
+                            
+                            # --- AANPASSING: OPSLAAN POSITIE ---
+                            if "Positie" in row_changes:
+                                execute_command("UPDATE scouting.shortlist_entries SET position = %s WHERE id = %s", (row_changes["Positie"], int(rec_id)))
+                                
                         st.success("Opgeslagen!")
                         st.cache_data.clear()
                         st.rerun()
@@ -272,7 +282,7 @@ if selected_list_id:
                             st.cache_data.clear()
                             st.rerun()
             else:
-                # NIVEAU 1 (Scouts) - Read Only
+                # Read Only View
                 def color_prio(val):
                     c = "#c0392b" if val == "High" else "#f39c12" if val == "Medium" else "#27ae60"
                     return f'color: {c}; font-weight: bold'
