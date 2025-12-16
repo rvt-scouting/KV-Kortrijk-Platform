@@ -4,19 +4,19 @@ import pandas as pd
 from utils import run_query, show_sidebar_filters, POSITION_METRICS, get_config_for_position
 
 # -----------------------------------------------------------------------------
-# 1. SETUP & FILTERS (GELINKT AAN JOUW UTILS.PY)
+# 1. SETUP & FILTERS (COMPATIBEL MET JOUW UTILS.PY)
 # -----------------------------------------------------------------------------
 # Jouw utils.py geeft exact deze 2 waarden terug
 season, iteration_id = show_sidebar_filters()
 
-# Omdat jouw utils.py geen club-filter heeft, halen we de clublijst hier op
-# zodat we niets aan utils.py hoeven te veranderen.
 selected_squad_id = None
+sel_squad_name = None
+
 if iteration_id:
     st.sidebar.divider()
     st.sidebar.subheader("2. Specifieke Club")
     
-    # Query om alle clubs in de geselecteerde competitie op te halen
+    # Query om alle clubs in de geselecteerde competitie op te halen 
     squad_query = """
         SELECT DISTINCT s.id, s.name 
         FROM analysis.squads s
@@ -33,7 +33,8 @@ if iteration_id:
         # We zetten KV Kortrijk als standaard als deze in de lijst staat
         default_idx = squad_names.index('KV Kortrijk') if 'KV Kortrijk' in squad_names else 0
         sel_squad_name = st.sidebar.selectbox("Kies Club:", squad_names, index=default_idx)
-        selected_squad_id = squad_map[sel_sq_name]
+        # FIX: Variabele naam moet exact overeenkomen met de selectbox output
+        selected_squad_id = squad_map[sel_squad_name]
 
 if not iteration_id or not selected_squad_id:
     st.warning("Selecteer a.u.b. een seizoen, competitie en club in de zijbalk.")
@@ -64,11 +65,11 @@ for db_pos, display_label in display_positions:
 
     st.header(display_label)
     
-    # IDs voorbereiden (text cast voor de database)
+    # IDs voorbereiden (text cast voor de database) 
     rel_ids = metrics_config.get('aan_bal', []) + metrics_config.get('zonder_bal', [])
     ids_str = ",".join([f"'{x}'" for x in rel_ids])
 
-    # Query voor de clubspelers
+    # Query voor de clubspelers 
     query = f"""
         SELECT 
             p.commonname as "Speler", 
@@ -132,7 +133,6 @@ for db_pos, display_label in display_positions:
                 df_targets_raw = run_query(target_query, (db_pos, selected_squad_id))
                 
                 if not df_targets_raw.empty:
-                    # Ook hier pivot_table om duplicaten te middelen
                     df_target_pivot = df_targets_raw.pivot_table(
                         index=['Naam', 'Club'], 
                         columns='metric_name', 
