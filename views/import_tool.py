@@ -38,7 +38,7 @@ def parse_legacy_player_string(player_str):
     return player_str.strip(), ""
 
 def search_players_fuzzy(name_part):
-    """Zoekt in DB op basis van naam (flexibel)"""
+    """Zoekt in DB op basis van naam (flexibel) + haalt TEAM op"""
     if not name_part or len(name_part) < 2: return pd.DataFrame()
     
     # Probeer achternaam te isoleren
@@ -46,10 +46,12 @@ def search_players_fuzzy(name_part):
     if "." in name_part:
         search_term = name_part.split('.')[-1].strip()
     
+    # --- AANGEPASTE QUERY MET JOIN NAAR SQUADS ---
     query = """
-        SELECT id, commonname, firstname, lastname, birthdate
-        FROM public.players 
-        WHERE commonname ILIKE %s OR lastname ILIKE %s 
+        SELECT p.id, p.commonname, p.firstname, p.lastname, p.birthdate, s.name as team_name
+        FROM public.players p
+        LEFT JOIN public.squads s ON p."currentSquadId" = s.id
+        WHERE p.commonname ILIKE %s OR p.lastname ILIKE %s 
         LIMIT 10
     """
     term = f"%{search_term}%"
@@ -94,9 +96,6 @@ def save_legacy_report(row_data, db_player_id=None, custom_player_name=None, sco
         positie = str(row_data.get('Starting Position', '')).strip()
         
         # LOGICA: ID of Custom Naam?
-        # Als db_player_id is meegegeven -> speler_id vullen, custom NULL
-        # Als custom_player_name is meegegeven -> speler_id NULL, custom vullen
-        
         val_speler_id = db_player_id
         val_custom_naam = custom_player_name
         
@@ -168,17 +167,13 @@ else:
     legacy_player_name = str(row.get('Player')).strip()
 
     # --- AUTO-PROCESS LOGICA ---
-    # Check of we deze speler al kennen in de mapping
     if legacy_player_name in st.session_state.player_map:
         mapped_val = st.session_state.player_map[legacy_player_name]
         
-        # Scout ID ophalen
         scout_email = str(row.get('SCOUT')).lower().strip()
         scout_id = st.session_state.scout_map.get(scout_email, 1) 
         
-        # Check: Is het een ID (int) of een Custom Naam (str)?
         is_db_id = isinstance(mapped_val, int)
-        
         db_id = mapped_val if is_db_id else None
         cust_name = mapped_val if not is_db_id else None
         
@@ -186,7 +181,7 @@ else:
             st.session_state.current_index += 1
             st.rerun()
     
-    # --- UI LAYOUT (ALLEEN ALS NIET AUTOMATISCH GEMATCHED) ---
+    # --- UI LAYOUT ---
     progress = (idx / len(df))
     st.progress(progress, text=f"Bezig met rij {idx + 1} van {len(df)}")
     
@@ -196,7 +191,7 @@ else:
     with col_source:
         st.subheader("📄 Bron Data")
         st.info(f"**Speler:** {legacy_player_name}")
-        st.write(f"**Team:** {row.get('Team')}")
+        st.write(f"**Team (Excel):** {row.get('Team')}")
         st.write(f"**Datum:** {row.get('DATE')}")
         
         scout_email = str(row.get('SCOUT')).lower().strip()
@@ -224,12 +219,19 @@ else:
         if not results.empty:
             st.write("Database Resultaten:")
             for _, db_row in results.iterrows():
+                # Card voor elke speler
                 c1, c2, c3 = st.columns([3, 2, 2])
+                
+                # --- AANGEPASTE WEERGAVE MET CLUB ---
+                club_display = db_row['team_name'] if db_row['team_name'] else "Geen club"
+                
                 with c1: st.write(f"**{db_row['commonname']}**")
-                with c2: st.caption(f"{db_row['firstname']} {db_row['lastname']}")
+                with c2: 
+                    st.caption(f"{db_row['firstname']} {db_row['lastname']}")
+                    st.caption(f"⚽ {club_display} | 📅 {db_row['birthdate']}")
+                
                 with c3:
                     if st.button("🔗 Koppel", key=f"link_{db_row['id']}", type="primary"):
-                        # Save mapping as INT (Database ID)
                         st.session_state.player_map[legacy_player_name] = int(db_row['id'])
                         
                         if save_legacy_report(row, db_player_id=int(db_row['id']), scout_id=found_scout_id):
@@ -239,13 +241,12 @@ else:
         else:
             st.warning("Geen directe matches gevonden.")
 
-        # OPTIE 2: CUSTOM SPELER (NIEUW)
+        # OPTIE 2: CUSTOM SPELER
         with st.expander("➕ Speler niet gevonden? Maak Custom aan", expanded=True):
             st.write("Sla op als 'Custom Speler' (zonder ID).")
             custom_name_input = st.text_input("Naam voor rapport:", value=legacy_player_name, key=f"cust_{idx}")
             
             if st.button("💾 Opslaan als Custom Speler", key=f"btn_cust_{idx}"):
-                # Save mapping as STRING (Custom Name)
                 st.session_state.player_map[legacy_player_name] = custom_name_input
                 
                 if save_legacy_report(row, custom_player_name=custom_name_input, scout_id=found_scout_id):
