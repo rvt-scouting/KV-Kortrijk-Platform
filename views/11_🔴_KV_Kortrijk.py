@@ -4,13 +4,12 @@ import plotly.express as px
 from utils import run_query, show_sidebar_filters, POSITION_METRICS, get_config_for_position
 
 # -----------------------------------------------------------------------------
-# 1. CONSTANTEN EN SETUP
+# 1. SETUP
 # -----------------------------------------------------------------------------
 KVK_SQUAD_ID = '362' 
 
 st.title("🔴 KV Kortrijk: Club Dashboard")
 
-# Gebruik de sidebar filters voor de context
 season, iteration_id = show_sidebar_filters()
 
 if not iteration_id:
@@ -39,7 +38,7 @@ if not df_style.empty:
         st.plotly_chart(fig, use_container_width=True)
 
 # -----------------------------------------------------------------------------
-# 3. POSITIE ANALYSE (MET FIX VOOR DATATYPES)
+# 3. POSITIE ANALYSE
 # -----------------------------------------------------------------------------
 st.divider()
 st.header("⚽ Positie Analyse & Verbeterpunten")
@@ -59,8 +58,7 @@ metrics_config = get_config_for_position(selected_pos_key, POSITION_METRICS)
 
 if metrics_config:
     relevant_ids = metrics_config.get('aan_bal', []) + metrics_config.get('zonder_bal', [])
-    
-    # FIX: Zet de IDs om naar een string van gequoteerde waarden: '66','58','64',...
+    # Type cast naar string omdat metric_id in de DB 'text' is 
     ids_string = ",".join([f"'{x}'" for x in relevant_ids])
     
     kvk_players_query = f"""
@@ -81,25 +79,34 @@ if metrics_config:
 
     if not df_kvk.empty:
         df_kvk_pivot = df_kvk.pivot(index='Speler', columns='metric_name', values='score')
-        st.subheader(f"Huidige Bezetting: {pos_options[selected_pos_key]}")
-        st.dataframe(df_kvk_pivot.style.background_gradient(cmap='RdYlGn', axis=None, vmin=40, vmax=80))
+        
+        # Gemiddelde berekenen
+        averages = df_kvk_pivot.mean().to_frame().T
+        averages.index = ['⭐ GEMIDDELDE']
+        df_display = pd.concat([df_kvk_pivot, averages])
 
-        averages = df_kvk_pivot.mean().round(1)
-        weak_metrics = averages[averages < 60]
+        st.subheader(f"Huidige Bezetting: {pos_options[selected_pos_key]}")
+        
+        # Veilig stylen (voorkomt crash als matplotlib ontbreekt)
+        try:
+            st.dataframe(
+                df_display.style.background_gradient(cmap='RdYlGn', axis=0, vmin=40, vmax=80).format("{:.1f}"),
+                use_container_width=True
+            )
+        except Exception:
+            st.dataframe(df_display.round(1), use_container_width=True)
+
+        # Werkpunten (onder 60)
+        weak_metrics = averages.iloc[0][averages.iloc[0] < 60]
         
         if not weak_metrics.empty:
-            st.warning(f"⚠️ **Zwakke punten:** {', '.join(weak_metrics.index.tolist())}")
+            st.warning(f"⚠️ **Collectieve werkpunten:** {', '.join(weak_metrics.index.tolist())}")
             
-            # Verkrijg de IDs van de zwakke metrics voor de volgende query
             weak_ids = df_kvk[df_kvk['metric_name'].isin(weak_metrics.index)]['metric_id'].unique().tolist()
-            # FIX: Ook hier quoten voor de IN clausule
             weak_ids_string = ",".join([f"'{x}'" for x in weak_ids])
 
-            # -----------------------------------------------------------------------------
-            # 4. TRANSFER TARGET FINDER (MET FIX)
-            # -----------------------------------------------------------------------------
             st.divider()
-            st.header("🔎 Marktverkenning")
+            st.header("🔎 Marktverkenning (Targets)")
             
             target_query = f"""
                 SELECT 
@@ -121,12 +128,10 @@ if metrics_config:
 
             if not df_targets_raw.empty:
                 target_summary = df_targets_raw.groupby(['Naam', 'Club']).agg(
-                    Dicht_Aantal_Gaten=('metric_id', 'count'),
-                    Gemiddelde_Score=('score', 'mean')
-                ).reset_index().sort_values(by=['Dicht_Aantal_Gaten', 'Gemiddelde_Score'], ascending=False)
+                    Gaten_Gedicht=('metric_id', 'count'),
+                    Gem_Score=('score', 'mean')
+                ).reset_index().sort_values(by=['Gaten_Gedicht', 'Gem_Score'], ascending=False)
                 
                 st.table(target_summary.head(15))
             else:
-                st.write("Geen versterkingen gevonden op de markt voor deze criteria.")
-        else:
-            st.success("✅ Geen kritieke zwakke punten gevonden.")
+                st.write("Geen versterkingen gevonden op de markt.")
