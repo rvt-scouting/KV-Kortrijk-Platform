@@ -6,7 +6,7 @@ from utils import run_query, show_sidebar_filters, POSITION_METRICS, get_config_
 # -----------------------------------------------------------------------------
 # 1. SETUP & FILTERS (COMPATIBEL MET JOUW UTILS.PY)
 # -----------------------------------------------------------------------------
-# Jouw utils.py geeft exact deze 2 waarden terug
+# Jouw utils.py geeft exact deze 2 waarden terug: season en iteration_id
 season, iteration_id = show_sidebar_filters()
 
 selected_squad_id = None
@@ -16,7 +16,7 @@ if iteration_id:
     st.sidebar.divider()
     st.sidebar.subheader("2. Specifieke Club")
     
-    # Query om alle clubs in de geselecteerde competitie op te halen 
+    # Query om alle clubs in de geselecteerde competitie op te halen
     squad_query = """
         SELECT DISTINCT s.id, s.name 
         FROM analysis.squads s
@@ -33,7 +33,7 @@ if iteration_id:
         # We zetten KV Kortrijk als standaard als deze in de lijst staat
         default_idx = squad_names.index('KV Kortrijk') if 'KV Kortrijk' in squad_names else 0
         sel_squad_name = st.sidebar.selectbox("Kies Club:", squad_names, index=default_idx)
-        # FIX: Variabele naam moet exact overeenkomen met de selectbox output
+        # Fix voor de eerdere NameError:
         selected_squad_id = squad_map[sel_squad_name]
 
 if not iteration_id or not selected_squad_id:
@@ -43,15 +43,18 @@ if not iteration_id or not selected_squad_id:
 st.title(f"🔴 Squad Analyse: {sel_squad_name} ({season})")
 
 # -----------------------------------------------------------------------------
-# 2. POSITIE DEFINITIES (VOLGORDE OP DE PAGINA)
+# 2. EXACTE POSITIES UIT DE DATABASE
 # -----------------------------------------------------------------------------
+# Deze lijst is nu gematched met de data uit je CSV bestand
 display_positions = [
     ("CENTRAL_DEFENDER", "🛡️ Centrale Verdedigers"),
-    ("RIGHT_WINGBACK_DEFENDER", "🏃 Vleugelverdedigers"),
-    ("DEFENSIVE_MIDFIELD", "⚓ Defensieve Middenvelders"),
+    ("RIGHT_WINGBACK_DEFENDER", "🏃 Vleugelverdedigers (R)"),
+    ("LEFT_WINGBACK_DEFENDER", "🏃 Vleugelverdedigers (L)"),
+    ("DEFENSE_MIDFIELD", "⚓ Defensieve Middenvelders"),
     ("CENTRAL_MIDFIELD", "🧠 Centrale Middenvelders"),
     ("ATTACKING_MIDFIELD", "🪄 Aanvallende Middenvelders"),
-    ("RIGHT_WINGER", "⚡ Buitenspelers"),
+    ("RIGHT_WINGER", "⚡ Buitenspelers (R)"),
+    ("LEFT_WINGER", "⚡ Buitenspelers (L)"),
     ("CENTER_FORWARD", "🎯 Spitsen")
 ]
 
@@ -59,17 +62,17 @@ display_positions = [
 # 3. DE LOOP: ANALYSE PER POSITIE
 # -----------------------------------------------------------------------------
 for db_pos, display_label in display_positions:
+    # Haal de juiste metrics config op uit utils.py
     metrics_config = get_config_for_position(db_pos, POSITION_METRICS)
+    
     if not metrics_config:
         continue
 
-    st.header(display_label)
-    
-    # IDs voorbereiden (text cast voor de database) 
+    # IDs voorbereiden voor SQL
     rel_ids = metrics_config.get('aan_bal', []) + metrics_config.get('zonder_bal', [])
     ids_str = ",".join([f"'{x}'" for x in rel_ids])
 
-    # Query voor de clubspelers 
+    # Query voor de clubspelers
     query = f"""
         SELECT 
             p.commonname as "Speler", 
@@ -87,7 +90,9 @@ for db_pos, display_label in display_positions:
     df_pos = run_query(query, (selected_squad_id, iteration_id, db_pos))
 
     if not df_pos.empty:
-        # GEBRUIK pivot_table met mean om de 'Duplicate entries' error te voorkomen
+        st.header(display_label)
+        
+        # Gebruik pivot_table tegen de duplicate entries error
         df_pivot = df_pos.pivot_table(index='Speler', columns='metric_name', values='score', aggfunc='mean')
         
         st.write("### 👤 Individuele Scores")
@@ -147,9 +152,8 @@ for db_pos, display_label in display_positions:
                         .format("{:.1f}", na_rep="-"),
                         use_container_width=True
                     )
+                else:
+                    st.write("Geen spelers gevonden op de markt voor deze werkpunten.")
         else:
             st.success("Deze positie is optimaal bezet (gemiddeld > 60).")
-    else:
-        st.caption(f"Geen data gevonden voor {display_label}.")
-    
-    st.divider()
+        st.divider()
