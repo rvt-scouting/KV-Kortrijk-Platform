@@ -107,7 +107,7 @@ if selected_list_id:
     tab1, tab2 = st.tabs(["➕ Speler Toevoegen", "📋 Lijst Bekijken & Bewerken"])
 
     # LIJST MET POSITIES (Gebruikt in beide tabs)
-    pos_options = ["GK","CB", "RB", "LB", "DM", "CM", "ACM", "RW", "LW", "FW"]
+    pos_options = ["GK","RCB","LCB", "RB", "LB", "DM", "CM", "ACM", "RW", "LW", "FW"]
 
     # =========================================================================
     # TAB 1: SPELER TOEVOEGEN
