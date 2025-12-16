@@ -60,7 +60,6 @@ display_positions = [
 # 3. DE LOOP: ANALYSE PER POSITIE
 # -----------------------------------------------------------------------------
 for db_pos, display_label in display_positions:
-    # Haal de juiste metrics config op uit utils.py
     metrics_config = get_config_for_position(db_pos, POSITION_METRICS)
     
     if not metrics_config:
@@ -70,7 +69,7 @@ for db_pos, display_label in display_positions:
     rel_ids = metrics_config.get('aan_bal', []) + metrics_config.get('zonder_bal', [])
     ids_str = ",".join([f"'{x}'" for x in rel_ids])
 
-    # Query voor de clubspelers - Inclusief ::text casts om SQL Errors te voorkomen
+    # Query voor de clubspelers
     query = f"""
         SELECT 
             p.commonname as "Speler", 
@@ -115,14 +114,15 @@ for db_pos, display_label in display_positions:
             weak_ids = df_pos[df_pos['metric_name'].isin(weak_names)]['metric_id'].unique().tolist()
             weak_ids_str = ",".join([f"'{x}'" for x in weak_ids])
 
-            with st.expander(f"🎯 Versterkingen voor: {', '.join(weak_names)}"):
-                # Target query met de juiste ::text casts voor alle joins
+            with st.expander(f"🎯 Top 15 Versterkingen (Max 25j) voor: {', '.join(weak_names)}"):
+                # Target query met leeftijdscrawling uit de 'birthdate' kolom 
                 target_query = f"""
                     SELECT 
                         p.commonname as "Naam", 
                         s.name as "Club", 
                         def.name as metric_name,
-                        pfs.final_score_1_to_100 as score
+                        pfs.final_score_1_to_100 as score,
+                        EXTRACT(YEAR FROM AGE(p.birthdate)) as "Leeftijd"
                     FROM analysis.player_final_scores pfs
                     JOIN analysis.players p ON pfs."playerId"::text = p.id
                     JOIN analysis.squads s ON pfs."squadId"::text = s.id
@@ -133,18 +133,23 @@ for db_pos, display_label in display_positions:
                       AND pfs.metric_id IN ({weak_ids_str}) 
                       AND pfs.final_score_1_to_100 > 60
                       AND pfs."squadId"::text != %s
+                      AND EXTRACT(YEAR FROM AGE(p.birthdate)) <= 25
                 """
                 df_targets_raw = run_query(target_query, (db_pos, selected_squad_id))
                 
                 if not df_targets_raw.empty:
+                    # Leeftijd toegevoegd aan de index zodat deze zichtbaar blijft in de gepivoteerde tabel
                     df_target_pivot = df_targets_raw.pivot_table(
-                        index=['Naam', 'Club'], 
+                        index=['Naam', 'Leeftijd', 'Club'], 
                         columns='metric_name', 
                         values='score', 
                         aggfunc='mean'
                     )
+                    
+                    # Bereken relevantie (hoeveel gaten worden gedicht)
                     df_target_pivot['Gaten Gedicht'] = df_target_pivot.notnull().sum(axis=1)
-                    df_target_pivot = df_target_pivot.sort_values('Gaten Gedicht', ascending=False)
+                    # Sorteren en limiteren tot de top 15
+                    df_target_pivot = df_target_pivot.sort_values('Gaten Gedicht', ascending=False).head(15)
                     
                     st.dataframe(
                         df_target_pivot.style.background_gradient(cmap='RdYlGn', axis=None, vmin=40, vmax=80)
@@ -152,7 +157,7 @@ for db_pos, display_label in display_positions:
                         use_container_width=True
                     )
                 else:
-                    st.info("Geen externe spelers gevonden die momenteel hoger scoren dan 60 op deze metrics.")
+                    st.info("Geen spelers onder de 25j gevonden die momenteel hoger scoren dan 60 op deze metrics.")
         else:
             st.success("Deze positie is optimaal bezet (groepsgemiddelde > 60).")
         st.divider()
