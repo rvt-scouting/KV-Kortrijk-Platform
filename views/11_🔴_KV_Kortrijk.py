@@ -33,7 +33,6 @@ if iteration_id:
         # We zetten KV Kortrijk als standaard als deze in de lijst staat
         default_idx = squad_names.index('KV Kortrijk') if 'KV Kortrijk' in squad_names else 0
         sel_squad_name = st.sidebar.selectbox("Kies Club:", squad_names, index=default_idx)
-        # Fix voor de eerdere NameError:
         selected_squad_id = squad_map[sel_squad_name]
 
 if not iteration_id or not selected_squad_id:
@@ -45,7 +44,6 @@ st.title(f"🔴 Squad Analyse: {sel_squad_name} ({season})")
 # -----------------------------------------------------------------------------
 # 2. EXACTE POSITIES UIT DE DATABASE
 # -----------------------------------------------------------------------------
-# Deze lijst is nu gematched met de data uit je CSV bestand
 display_positions = [
     ("CENTRAL_DEFENDER", "🛡️ Centrale Verdedigers"),
     ("RIGHT_WINGBACK_DEFENDER", "🏃 Vleugelverdedigers (R)"),
@@ -72,7 +70,7 @@ for db_pos, display_label in display_positions:
     rel_ids = metrics_config.get('aan_bal', []) + metrics_config.get('zonder_bal', [])
     ids_str = ",".join([f"'{x}'" for x in rel_ids])
 
-    # Query voor de clubspelers
+    # Query voor de clubspelers - Inclusief ::text casts om SQL Errors te voorkomen
     query = f"""
         SELECT 
             p.commonname as "Speler", 
@@ -80,7 +78,7 @@ for db_pos, display_label in display_positions:
             pfs.final_score_1_to_100 as score, 
             def.name as metric_name
         FROM analysis.player_final_scores pfs
-        JOIN analysis.players p ON pfs."playerId" = p.id
+        JOIN analysis.players p ON pfs."playerId"::text = p.id
         JOIN analysis.playerscores_definitions def ON pfs.metric_id::text = def.id
         WHERE pfs."squadId"::text = %s 
           AND pfs."iterationId"::text = %s 
@@ -118,6 +116,7 @@ for db_pos, display_label in display_positions:
             weak_ids_str = ",".join([f"'{x}'" for x in weak_ids])
 
             with st.expander(f"🎯 Versterkingen voor: {', '.join(weak_names)}"):
+                # Target query met de juiste ::text casts voor alle joins
                 target_query = f"""
                     SELECT 
                         p.commonname as "Naam", 
@@ -125,11 +124,11 @@ for db_pos, display_label in display_positions:
                         def.name as metric_name,
                         pfs.final_score_1_to_100 as score
                     FROM analysis.player_final_scores pfs
-                    JOIN analysis.players p ON pfs."playerId" = p.id
-                    JOIN analysis.squads s ON pfs."squadId" = s.id
-                    JOIN public.iterations i ON pfs."iterationId" = i.id
+                    JOIN analysis.players p ON pfs."playerId"::text = p.id
+                    JOIN analysis.squads s ON pfs."squadId"::text = s.id
+                    JOIN public.iterations i ON pfs."iterationId"::text = i.id
                     JOIN analysis.playerscores_definitions def ON pfs.metric_id::text = def.id
-                    WHERE (i.season = '25/26' OR i.season = '2025')
+                    WHERE (i.season = '25/26' OR i.season = '2025' OR i.season = '24/25')
                       AND pfs.position = %s
                       AND pfs.metric_id IN ({weak_ids_str}) 
                       AND pfs.final_score_1_to_100 > 60
@@ -153,7 +152,7 @@ for db_pos, display_label in display_positions:
                         use_container_width=True
                     )
                 else:
-                    st.write("Geen spelers gevonden op de markt voor deze werkpunten.")
+                    st.info("Geen externe spelers gevonden die momenteel hoger scoren dan 60 op deze metrics.")
         else:
-            st.success("Deze positie is optimaal bezet (gemiddeld > 60).")
+            st.success("Deze positie is optimaal bezet (groepsgemiddelde > 60).")
         st.divider()
