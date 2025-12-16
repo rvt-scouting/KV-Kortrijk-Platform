@@ -39,7 +39,7 @@ if not df_style.empty:
         st.plotly_chart(fig, use_container_width=True)
 
 # -----------------------------------------------------------------------------
-# 3. POSITIE ANALYSE (MET FIX VOOR DATATYPES)
+# 3. POSITIE ANALYSE MET GEMIDDELDEN
 # -----------------------------------------------------------------------------
 st.divider()
 st.header("⚽ Positie Analyse & Verbeterpunten")
@@ -59,8 +59,6 @@ metrics_config = get_config_for_position(selected_pos_key, POSITION_METRICS)
 
 if metrics_config:
     relevant_ids = metrics_config.get('aan_bal', []) + metrics_config.get('zonder_bal', [])
-    
-    # FIX: Zet de IDs om naar een string van gequoteerde waarden: '66','58','64',...
     ids_string = ",".join([f"'{x}'" for x in relevant_ids])
     
     kvk_players_query = f"""
@@ -79,50 +77,36 @@ if metrics_config:
     """
     df_kvk = run_query(kvk_players_query, (KVK_SQUAD_ID, iteration_id, selected_pos_key))
 
-if not df_kvk.empty:
-    # 1. Maak de pivot tabel
-    df_kvk_pivot = df_kvk.pivot(index='Speler', columns='metric_name', values='score')
-    
-    # 2. Bereken het gemiddelde per kolom (metric) [cite: 1]
-    averages = df_kvk_pivot.mean().to_frame().T
-    averages.index = ['⭐ GEMIDDELDE'] # Geef de rij een duidelijke naam
-    
-    # 3. Voeg de gemiddelde-rij toe aan de tabel
-    df_with_mean = pd.concat([df_kvk_pivot, averages])
-
-    st.subheader(f"Huidige Bezetting: {pos_options[selected_pos_key]}")
-    
-    try:
-        # Toon de tabel met styling 
-        # We gebruiken een formatter om alles op 1 decimaal af te ronden
-        st.dataframe(
-            df_with_mean.style.background_gradient(
-                cmap='RdYlGn', 
-                axis=0, # Gradient per kolom om spelers onderling te vergelijken
-                vmin=40, 
-                vmax=80
-            ).format("{:.1f}"), 
-            use_container_width=True
-        )
-    except Exception:
-        st.dataframe(df_with_mean.round(1), use_container_width=True)
-
-    # 4. Identificeer werkpunten op basis van de berekende gemiddeldes [cite: 1]
-    weak_metrics = averages.iloc[0][averages.iloc[0] < 60]
-    
-    if not weak_metrics.empty:
-        # Toon de waarschuwing met de specifieke metrics die onder de 60 scoren
-        st.warning(f"⚠️ **Collectieve werkpunten voor deze positie:** {', '.join(weak_metrics.index.tolist())}")
+    if not df_kvk.empty:
+        # Pivoteren
+        df_kvk_pivot = df_kvk.pivot(index='Speler', columns='metric_name', values='score')
         
-        # Haal de IDs op voor de scouting query [cite: 1]
-        weak_ids = df_kvk[df_kvk['metric_name'].isin(weak_metrics.index)]['metric_id'].unique().tolist()
-        weak_ids_string = ",".join([f"'{x}'" for x in weak_ids])
+        # Bereken gemiddelde en voeg toe als nieuwe rij
+        averages = df_kvk_pivot.mean().to_frame().T
+        averages.index = ['⭐ GEMIDDELDE']
+        df_with_mean = pd.concat([df_kvk_pivot, averages])
 
-            # -----------------------------------------------------------------------------
-            # 4. TRANSFER TARGET FINDER (MET FIX)
-            # -----------------------------------------------------------------------------
+        st.subheader(f"Huidige Bezetting: {pos_options[selected_pos_key]}")
+        
+        try:
+            st.dataframe(
+                df_with_mean.style.background_gradient(cmap='RdYlGn', axis=0, vmin=40, vmax=80).format("{:.1f}"),
+                use_container_width=True
+            )
+        except:
+            st.dataframe(df_with_mean.round(1), use_container_width=True)
+
+        # Werkpunten identificeren (< 60)
+        weak_metrics = averages.iloc[0][averages.iloc[0] < 60]
+        
+        if not weak_metrics.empty:
+            st.warning(f"⚠️ **Collectieve werkpunten:** {', '.join(weak_metrics.index.tolist())}")
+            
+            weak_ids = df_kvk[df_kvk['metric_name'].isin(weak_metrics.index)]['metric_id'].unique().tolist()
+            weak_ids_string = ",".join([f"'{x}'" for x in weak_ids])
+
             st.divider()
-            st.header("🔎 Marktverkenning")
+            st.header("🔎 Marktverkenning (Targets)")
             
             target_query = f"""
                 SELECT 
@@ -144,12 +128,12 @@ if not df_kvk.empty:
 
             if not df_targets_raw.empty:
                 target_summary = df_targets_raw.groupby(['Naam', 'Club']).agg(
-                    Dicht_Aantal_Gaten=('metric_id', 'count'),
-                    Gemiddelde_Score=('score', 'mean')
-                ).reset_index().sort_values(by=['Dicht_Aantal_Gaten', 'Gemiddelde_Score'], ascending=False)
+                    Gaten_Gedicht=('metric_id', 'count'),
+                    Gem_Score=('score', 'mean')
+                ).reset_index().sort_values(by=['Gaten_Gedicht', 'Gem_Score'], ascending=False)
                 
                 st.table(target_summary.head(15))
             else:
-                st.write("Geen versterkingen gevonden op de markt voor deze criteria.")
+                st.write("Geen versterkingen gevonden op de markt.")
         else:
             st.success("✅ Geen kritieke zwakke punten gevonden.")
