@@ -57,6 +57,7 @@ pg_home = st.Page(welcome, title="Home", icon="🏠")
 pg_profile = st.Page(test_page_func, title="Mijn Profiel", icon="👤")
 
 # HOOFD ANALYSE (GESPLITST)
+pg_kvk = st.Page("views/11_🔴_KV_Kortrijk.py", title="KV Kortrijk", icon="🔴")
 pg_player_analysis = st.Page("views/1_⚽_Spelers.py", title="Spelers Analyse", icon="⚽")
 pg_team_analysis = st.Page("views/10_🛡️_Teams.py", title="Team Analyse", icon="🛡️")
 
