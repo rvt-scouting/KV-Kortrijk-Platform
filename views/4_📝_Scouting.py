@@ -293,7 +293,8 @@ with col_list:
     st.markdown("---")
     knop_label = "➕ Speler toevoegen / Zoeken" if not is_manual_match else "Selecteer Speler"
     
-    if is_manual_match or st.button(knop_label, use_container_width=True):
+    # FIX: is_manual_match hier weggehaald uit de OR conditie
+    if st.button(knop_label, use_container_width=True):
          st.session_state.manual_player_mode = True
          st.session_state.active_player_id = None
 
@@ -336,7 +337,6 @@ with col_editor:
              active_pname = df_players[df_players['player_id'] == active_pid].iloc[0]['commonname']
         # Optie 2: Uit de database (als we gezocht hebben)
         else:
-             # CORRECTIE: We zetten '{active_pid}' tussen quotes zodat SQL weet dat het tekst is
              res = run_query(f"SELECT commonname FROM public.players WHERE id = '{active_pid}'")
              if not res.empty: active_pname = res.iloc[0]['commonname']
              
