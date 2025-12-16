@@ -1,137 +1,90 @@
 import streamlit as st
+import psycopg2
 import pandas as pd
-# We importeren de benodigde functies en configuraties uit utils.py 
-from utils import run_query, show_sidebar_filters, POSITION_METRICS, get_config_for_position
 
-# -----------------------------------------------------------------------------
-# 1. SETUP & DYNAMISCHE FILTERS
-# -----------------------------------------------------------------------------
-# De filters in de sidebar geven nu 3 waarden terug 
-season, iteration_id, squad_id = show_sidebar_filters()
+# 1. DATABASE CONNECTIE
+def init_connection():
+    return psycopg2.connect(
+        host=st.secrets["postgres"]["host"],
+        port=st.secrets["postgres"]["port"],
+        database=st.secrets["postgres"]["dbname"],
+        user=st.secrets["postgres"]["user"],
+        password=st.secrets["postgres"]["password"]
+    )
 
-if not iteration_id or not squad_id:
-    st.warning("Selecteer a.u.b. een seizoen, competitie en club in de zijbalk.")
-    st.stop()
+def run_query(query, params=None):
+    conn = init_connection()
+    try:
+        return pd.read_sql(query, conn, params=params)
+    except Exception as e:
+        st.error(f"SQL Error: {e}")
+        return pd.DataFrame()
+    finally:
+        conn.close()
 
-st.title(f"🔴 Squad Analyse: {season}")
-
-# -----------------------------------------------------------------------------
-# 2. DEFINITIE VAN POSITIES (VOLGORDE OP DE PAGINA)
-# -----------------------------------------------------------------------------
-display_positions = [
-    ("CENTRAL_DEFENDER", "🛡️ Centrale Verdedigers"),
-    ("RIGHT_WINGBACK_DEFENDER", "🏃 Vleugelverdedigers"),
-    ("DEFENSIVE_MIDFIELD", "⚓ Defensieve Middenvelders"),
-    ("CENTRAL_MIDFIELD", "🧠 Centrale Middenvelders"),
-    ("ATTACKING_MIDFIELD", "🪄 Aanvallende Middenvelders"),
-    ("RIGHT_WINGER", "⚡ Buitenspelers"),
-    ("CENTER_FORWARD", "🎯 Spitsen")
-]
-
-# -----------------------------------------------------------------------------
-# 3. DE LOOP: ANALYSE PER POSITIE
-# -----------------------------------------------------------------------------
-for db_pos, display_label in display_positions:
-    # Gebruik de centrale functie uit utils om metrics op te halen 
-    metrics_config = get_config_for_position(db_pos, POSITION_METRICS)
+# 2. SIDEBAR FILTERS (Met KVK Defaults)
+def show_sidebar_filters():
+    st.sidebar.header("1. Selecteer Data")
     
-    if not metrics_config:
-        continue
+    # Seizoen - Default 25/26
+    df_seasons = run_query("SELECT DISTINCT season FROM public.iterations ORDER BY season DESC;")
+    if df_seasons.empty: return None, None, None
+    seasons_list = df_seasons['season'].tolist()
+    def_s_idx = seasons_list.index('25/26') if '25/26' in seasons_list else 0
+    selected_season = st.sidebar.selectbox("Seizoen:", seasons_list, index=def_s_idx)
 
-    st.header(display_label)
-    
-    # Haal alle relevante IDs op en zet ze om naar een string voor SQL 
-    rel_ids = metrics_config.get('aan_bal', []) + metrics_config.get('zonder_bal', [])
-    ids_str = ",".join([f"'{x}'" for x in rel_ids])
+    # Competitie - Default Challenger Pro League
+    iteration_id = None
+    df_comps = run_query('SELECT DISTINCT "competitionName", id FROM public.iterations WHERE season = %s', (selected_season,))
+    if not df_comps.empty:
+        comp_map = dict(zip(df_comps['competitionName'], df_comps['id']))
+        comp_list = list(comp_map.keys())
+        def_c_idx = comp_list.index('Challenger Pro League') if 'Challenger Pro League' in comp_list else 0
+        selected_comp = st.sidebar.selectbox("Competitie:", comp_list, index=def_c_idx)
+        iteration_id = str(comp_map[selected_comp])
 
-    # Query voor de huidige clubspelers 
-    query = f"""
-        SELECT 
-            p.commonname as "Speler", 
-            pfs.metric_id, 
-            pfs.final_score_1_to_100 as score, 
-            def.name as metric_name
-        FROM analysis.player_final_scores pfs
-        JOIN analysis.players p ON pfs."playerId" = p.id
-        JOIN analysis.playerscores_definitions def ON pfs.metric_id::text = def.id
-        WHERE pfs."squadId"::text = %s 
-          AND pfs."iterationId"::text = %s 
-          AND pfs.position = %s
-          AND pfs.metric_id IN ({ids_str})
-    """
-    df_pos = run_query(query, (squad_id, iteration_id, db_pos))
+    # Club - Default KV Kortrijk (ID 362)
+    selected_squad_id = None
+    if iteration_id:
+        squad_query = """
+            SELECT DISTINCT s.id, s.name FROM analysis.squads s
+            JOIN analysis.player_final_scores pfs ON s.id = pfs."squadId"::text
+            WHERE pfs."iterationId"::text = %s ORDER BY s.name
+        """
+        df_sq = run_query(squad_query, (iteration_id,))
+        if not df_sq.empty:
+            sq_map = dict(zip(df_sq['name'], df_sq['id']))
+            sq_list = list(sq_map.keys())
+            def_q_idx = sq_list.index('KV Kortrijk') if 'KV Kortrijk' in sq_list else 0
+            sel_sq = st.sidebar.selectbox("Club:", sq_list, index=def_q_idx)
+            selected_squad_id = sq_map[sel_sq]
 
-    if not df_pos.empty:
-        # --- TABEL 1: INDIVIDUELE SCORES ---
-        df_pivot = df_pos.pivot_table(index='Speler', columns='metric_name', values='score', aggfunc='mean')
-        st.write("### 👤 Individuele Scores")
-        st.dataframe(
-            df_pivot.style.background_gradient(cmap='RdYlGn', axis=0, vmin=40, vmax=80).format("{:.1f}"), 
-            use_container_width=True
-        )
+    return selected_season, iteration_id, selected_squad_id
 
-        # --- TABEL 2: POSITIE GEMIDDELDE ---
-        st.write("### 📊 Positie Gemiddelde")
-        averages = df_pivot.mean().to_frame().T
-        averages.index = ["GROEP GEMIDDELDE"]
-        st.dataframe(
-            averages.style.background_gradient(cmap='RdYlGn', axis=1, vmin=40, vmax=80).format("{:.1f}"),
-            use_container_width=True
-        )
+# 3. CONFIGURATIES
+POSITION_METRICS = {
+    "central_defender": {"aan_bal": [66, 58, 64, 10, 163], "zonder_bal": [103, 93, 32, 94, 17, 65, 92]},
+    "wingback": {"aan_bal": [61, 66, 58, 54, 53, 52, 10, 9, 14], "zonder_bal": [68, 69, 17, 70]},
+    "defensive_midfield": {"aan_bal": [60, 10, 163, 44], "zonder_bal": [29, 65, 17, 16, 69, 68, 67]},
+    "central_midfield": {"aan_bal": [60, 61, 62, 73, 72, 64, 10, 163, 145], "zonder_bal": [65, 17, 69, 68]},
+    "attacking_midfield": {"aan_bal": [60, 61, 62, 73, 58, 2, 15, 52, 72, 10, 74, 9], "zonder_bal": []},
+    "winger": {"aan_bal": [60, 61, 62, 58, 54, 1, 53, 10, 9, 14, 6, 145], "zonder_bal": []},
+    "center_forward": {"aan_bal": [60, 61, 62, 73, 63, 2, 64, 10, 74, 9, 92, 97, 14, 6, 145], "zonder_bal": []}
+}
 
-        # --- TARGET FINDER (EXPANDER) ---
-        # We zoeken metrics waar het gemiddelde lager is dan 60 
-        weak_metrics = averages.iloc[0][averages.iloc[0] < 60]
-        
-        if not weak_metrics.empty:
-            weak_names = weak_metrics.index.tolist()
-            weak_ids = df_pos[df_pos['metric_name'].isin(weak_names)]['metric_id'].unique().tolist()
-            weak_ids_str = ",".join([f"'{x}'" for x in weak_ids])
+def get_config_for_position(db_position, config_dict):
+    if not db_position: return None
+    pos = str(db_position).upper().strip()
+    if pos == "CENTRAL_DEFENDER": return config_dict.get('central_defender')
+    elif pos in ["RIGHT_WINGBACK_DEFENDER", "LEFT_WINGBACK_DEFENDER"]: return config_dict.get('wingback')
+    elif pos in ["DEFENSIVE_MIDFIELD", "DEFENSE_MIDFIELD"]: return config_dict.get('defensive_midfield')
+    elif pos == "CENTRAL_MIDFIELD": return config_dict.get('central_midfield')
+    elif pos in ["ATTACKING_MIDFIELD", "OFFENSIVE_MIDFIELD"]: return config_dict.get('attacking_midfield')
+    elif pos in ["RIGHT_WINGER", "LEFT_WINGER"]: return config_dict.get('winger')
+    elif pos in ["CENTER_FORWARD", "STRIKER"]: return config_dict.get('center_forward')
+    return None
 
-            with st.expander(f"🎯 Versterkingen voor: {', '.join(weak_names)}"):
-                # Query voor markt-targets (Seizoen 25/26 of 2025) 
-                target_query = f"""
-                    SELECT 
-                        p.commonname as "Naam", 
-                        s.name as "Club", 
-                        def.name as metric_name,
-                        pfs.final_score_1_to_100 as score
-                    FROM analysis.player_final_scores pfs
-                    JOIN analysis.players p ON pfs."playerId" = p.id
-                    JOIN analysis.squads s ON pfs."squadId" = s.id
-                    JOIN public.iterations i ON pfs."iterationId" = i.id
-                    JOIN analysis.playerscores_definitions def ON pfs.metric_id::text = def.id
-                    WHERE (i.season = '25/26' OR i.season = '2025')
-                      AND pfs.position = %s
-                      AND pfs.metric_id IN ({weak_ids_str}) 
-                      AND pfs.final_score_1_to_100 > 60
-                      AND pfs."squadId"::text != %s
-                """
-                df_targets_raw = run_query(target_query, (db_pos, squad_id))
-                
-                if not df_targets_raw.empty:
-                    # Gebruik pivot_table om duplicaten te voorkomen 
-                    df_target_pivot = df_targets_raw.pivot_table(
-                        index=['Naam', 'Club'], 
-                        columns='metric_name', 
-                        values='score', 
-                        aggfunc='mean'
-                    )
-                    
-                    # Tel hoeveel van de zwakke punten gedicht worden
-                    df_target_pivot['Gaten Gedicht'] = df_target_pivot.notnull().sum(axis=1)
-                    df_target_pivot = df_target_pivot.sort_values('Gaten Gedicht', ascending=False)
-                    
-                    st.dataframe(
-                        df_target_pivot.style.background_gradient(cmap='RdYlGn', axis=None, vmin=40, vmax=80)
-                        .format("{:.1f}", na_rep="-"),
-                        use_container_width=True
-                    )
-                else:
-                    st.write("Geen spelers gevonden die op deze punten > 60 scoren.")
-        else:
-            st.success("Deze positie is optimaal bezet (alles gemiddeld > 60).")
-    else:
-        st.caption(f"Geen data gevonden voor deze positie bij de geselecteerde club.")
-    
-    st.divider()
+def check_login(email, password):
+    query = "SELECT id, naam, rol, toegangsniveau FROM scouting.gebruikers WHERE email = %s AND wachtwoord = %s AND actief = TRUE"
+    df = run_query(query, (email, password))
+    return df.iloc[0].to_dict() if not df.empty else None
