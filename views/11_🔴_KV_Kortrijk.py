@@ -4,13 +4,12 @@ import plotly.express as px
 from utils import run_query, show_sidebar_filters, POSITION_METRICS, get_config_for_position
 
 # -----------------------------------------------------------------------------
-# 1. CONSTANTEN EN SETUP
+# 1. SETUP
 # -----------------------------------------------------------------------------
 KVK_SQUAD_ID = '362' 
 
 st.title("🔴 KV Kortrijk: Club Dashboard")
 
-# Gebruik de sidebar filters voor de context
 season, iteration_id = show_sidebar_filters()
 
 if not iteration_id:
@@ -39,7 +38,7 @@ if not df_style.empty:
         st.plotly_chart(fig, use_container_width=True)
 
 # -----------------------------------------------------------------------------
-# 3. POSITIE ANALYSE MET GEMIDDELDEN
+# 3. POSITIE ANALYSE
 # -----------------------------------------------------------------------------
 st.divider()
 st.header("⚽ Positie Analyse & Verbeterpunten")
@@ -59,6 +58,7 @@ metrics_config = get_config_for_position(selected_pos_key, POSITION_METRICS)
 
 if metrics_config:
     relevant_ids = metrics_config.get('aan_bal', []) + metrics_config.get('zonder_bal', [])
+    # Type cast naar string omdat metric_id in de DB 'text' is 
     ids_string = ",".join([f"'{x}'" for x in relevant_ids])
     
     kvk_players_query = f"""
@@ -78,25 +78,25 @@ if metrics_config:
     df_kvk = run_query(kvk_players_query, (KVK_SQUAD_ID, iteration_id, selected_pos_key))
 
     if not df_kvk.empty:
-        # Pivoteren
         df_kvk_pivot = df_kvk.pivot(index='Speler', columns='metric_name', values='score')
         
-        # Bereken gemiddelde en voeg toe als nieuwe rij
+        # Gemiddelde berekenen
         averages = df_kvk_pivot.mean().to_frame().T
         averages.index = ['⭐ GEMIDDELDE']
-        df_with_mean = pd.concat([df_kvk_pivot, averages])
+        df_display = pd.concat([df_kvk_pivot, averages])
 
         st.subheader(f"Huidige Bezetting: {pos_options[selected_pos_key]}")
         
+        # Veilig stylen (voorkomt crash als matplotlib ontbreekt)
         try:
             st.dataframe(
-                df_with_mean.style.background_gradient(cmap='RdYlGn', axis=0, vmin=40, vmax=80).format("{:.1f}"),
+                df_display.style.background_gradient(cmap='RdYlGn', axis=0, vmin=40, vmax=80).format("{:.1f}"),
                 use_container_width=True
             )
-        except:
-            st.dataframe(df_with_mean.round(1), use_container_width=True)
+        except Exception:
+            st.dataframe(df_display.round(1), use_container_width=True)
 
-        # Werkpunten identificeren (< 60)
+        # Werkpunten (onder 60)
         weak_metrics = averages.iloc[0][averages.iloc[0] < 60]
         
         if not weak_metrics.empty:
@@ -135,5 +135,3 @@ if metrics_config:
                 st.table(target_summary.head(15))
             else:
                 st.write("Geen versterkingen gevonden op de markt.")
-        else:
-            st.success("✅ Geen kritieke zwakke punten gevonden.")
