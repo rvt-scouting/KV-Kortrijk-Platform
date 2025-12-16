@@ -31,14 +31,16 @@ def run_query(query, params=None):
 def show_sidebar_filters():
     st.sidebar.header("1. Selecteer Data")
     
-    # 1. Seizoen
+    # 1. Seizoen - Standaard op '25/26'
     season_query = "SELECT DISTINCT season FROM public.iterations ORDER BY season DESC;"
     df_seasons = run_query(season_query)
     if df_seasons.empty: return None, None, None
     seasons_list = df_seasons['season'].tolist()
-    selected_season = st.sidebar.selectbox("Seizoen:", seasons_list, key="sb_season")
+    
+    default_season = '25/26' if '25/26' in seasons_list else seasons_list[0]
+    selected_season = st.sidebar.selectbox("Seizoen:", seasons_list, index=seasons_list.index(default_season), key="sb_season")
 
-    # 2. Competitie
+    # 2. Competitie - Standaard op 'Challenger Pro League'
     selected_competition = None
     iteration_id = None
     if selected_season:
@@ -46,13 +48,15 @@ def show_sidebar_filters():
         df_comps = run_query(comp_query, params=(selected_season,))
         if not df_comps.empty:
             comp_dict = dict(zip(df_comps['competitionName'], df_comps['id']))
-            selected_competition = st.sidebar.selectbox("Competitie:", list(comp_dict.keys()), key="sb_competition")
+            comp_list = list(comp_dict.keys())
+            
+            default_comp = 'Challenger Pro League' if 'Challenger Pro League' in comp_list else comp_list[0]
+            selected_competition = st.sidebar.selectbox("Competitie:", comp_list, index=comp_list.index(default_comp), key="sb_competition")
             iteration_id = str(comp_dict[selected_competition])
 
-    # 3. Club (SQUAD)
+    # 3. Club - Standaard op 'KV Kortrijk'
     selected_squad_id = None
     if iteration_id:
-        # We zoeken clubs die data hebben in de player_final_scores voor deze iteratie
         squad_query = """
             SELECT DISTINCT s.id, s.name 
             FROM analysis.squads s
@@ -61,18 +65,12 @@ def show_sidebar_filters():
             ORDER BY s.name
         """
         df_squads = run_query(squad_query, (iteration_id,))
-        
         if not df_squads.empty:
-            squad_names = df_squads['name'].tolist()
-            squad_ids = df_squads['id'].tolist()
-            squad_map = dict(zip(squad_names, squad_ids))
+            squad_map = dict(zip(df_squads['name'], df_squads['id']))
+            squad_names = list(squad_map.keys())
             
-            # Probeer KVK (362) als standaard te zetten
-            default_ix = 0
-            if '362' in squad_ids:
-                default_ix = squad_ids.index('362')
-                
-            sel_squad_name = st.sidebar.selectbox("Club:", squad_names, index=default_ix)
+            default_club = 'KV Kortrijk' if 'KV Kortrijk' in squad_names else squad_names[0]
+            sel_squad_name = st.sidebar.selectbox("Club:", squad_names, index=squad_names.index(default_club))
             selected_squad_id = squad_map[sel_squad_name]
 
     return selected_season, iteration_id, selected_squad_id
