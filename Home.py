@@ -72,8 +72,10 @@ pg_disc = st.Page("views/5_🔎_Discover.py", title="Data Discover", icon="🔎"
 pg_match = st.Page("views/3_📊_Wedstrijden.py", title="Wedstrijd Analyse", icon="📊")
 pg_coach = st.Page("views/2_👔_Coaches.py", title="Coach Profielen", icon="👔")
 
-# Admin Module
+# Admin & Tools Module
 pg_admin = st.Page("views/8_⚙️_Admin.py", title="Admin Beheer", icon="⚙️")
+# --- NIEUWE PAGINA ---
+pg_import = st.Page("views/import_tool.py", title="Legacy Import Tool", icon="🏗️")
 
 # -----------------------------------------------------------------------------
 # 4. NAVIGATIE BOUWER
@@ -103,7 +105,6 @@ else:
     # --- NIVEAU 2: COACHES ---
     elif lvl == 2:
         # Coaches zien direct hun wedstrijd analyses
-        
         pages["Performance"] = [pg_match]
 
     # --- NIVEAU 3: MANAGEMENT / ADMIN ---
@@ -117,8 +118,8 @@ else:
         # 3. Overige Data
         pages["Performance Data"] = [pg_match, pg_coach]
         
-        # 4. Beheer
-        pages["Beheer"] = [pg_admin]
+        # 4. Beheer (HIER IS DE IMPORT TOOL TOEGEVOEGD)
+        pages["Beheer"] = [pg_admin, pg_import]
 
     # START DE NAVIGATIE
     with st.sidebar:
