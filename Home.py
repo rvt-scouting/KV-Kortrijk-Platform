@@ -100,7 +100,7 @@ else:
     if lvl == 1:
         # Scouts zien hun tools + de import tool
         # TOEGEVOEGD: pg_import aan de lijst
-        pages["Scouting"] = [pg_scout, pg_shortlists, pg_import]
+        pages["Scouting"] = [pg_scout, pg_shortlists, pg_dashboard, ]
 
     # --- NIVEAU 2: COACHES ---
     elif lvl == 2:
