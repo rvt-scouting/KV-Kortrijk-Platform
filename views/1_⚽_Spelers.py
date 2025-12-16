@@ -183,8 +183,10 @@ try:
             st.dataframe(df_chart.style.applymap(highlight_high_scores, subset=['Score']).format({'Score': '{:.1f}'}), use_container_width=True, hide_index=True)
         with c2:
             if not df_chart.empty:
-                fig = px.pie(df_chart, values='Score', names='Profiel', title=f'KVK Profielverdeling', hole=0.4, color_discrete_sequence=['#d71920', '#ecf0f1', '#bdc3c7', '#c0392b'])
-                fig.update_traces(textinfo='value', textfont_size=15, marker=dict(line=dict(color='#000000', width=1)))
+                # --- SPIDER CHART VERVANGING ---
+                fig = px.line_polar(df_chart, r='Score', theta='Profiel', line_close=True, title='KVK Profiel Spider Chart')
+                fig.update_traces(fill='toself', line_color='#d71920', marker=dict(size=8))
+                fig.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 100])))
                 st.plotly_chart(fig, use_container_width=True)
 
         # METRIEKEN & KPIS
@@ -225,9 +227,7 @@ try:
                 if not df_k1.empty: st.caption("Aan de Bal"); st.dataframe(df_k1.style.applymap(highlight_high_scores, subset=['Score']), use_container_width=True, hide_index=True)
                 if not df_k2.empty: st.caption("Zonder Bal"); st.dataframe(df_k2.style.applymap(highlight_high_scores, subset=['Score']), use_container_width=True, hide_index=True)
 
-        # =========================================================================
         # FYSIEKE DATA (SKILLCORNER)
-        # =========================================================================
         st.markdown("---")
         st.subheader("💪 Fysieke Data (SkillCorner)")
         
@@ -273,9 +273,7 @@ try:
             else: st.info("Geen fysieke data gekoppeld.")
         except Exception as e: st.error(f"Fout fysieke data: {e}")
 
-        # =========================================================================
         # INTERNE RAPPORTEN
-        # =========================================================================
         st.markdown("---")
         st.subheader("🕵️ Scouting Rapporten (Intern)")
         
@@ -291,7 +289,6 @@ try:
         try:
             df_internal = run_query(scouting_query, params=(str(final_player_id),))
             if not df_internal.empty:
-                # --- NIEUWE LAYOUT MET CHART ---
                 c1, c2 = st.columns([2, 1])
                 
                 with c1:
@@ -319,12 +316,12 @@ try:
                 
                 # Teksten eronder
                 with st.expander("📖 Lees volledige rapport teksten"):
-                    for idx, row in df_internal.iterrows():
-                        date_str = pd.to_datetime(row['Datum']).strftime('%d-%m-%Y')
-                        icon = "🏆" if row['gouden_buzzer'] else "📝"
-                        rating_str = f"({row['Rating']}/10)" if row['Rating'] else ""
-                        st.markdown(f"**{icon} {date_str} - {row['Scout']} {rating_str}**")
-                        if row['rapport_tekst']: st.info(row['rapport_tekst'])
+                    for idx, row_int in df_internal.iterrows():
+                        date_str = pd.to_datetime(row_int['Datum']).strftime('%d-%m-%Y')
+                        icon = "🏆" if row_int['gouden_buzzer'] else "📝"
+                        rating_str = f"({row_int['Rating']}/10)" if row_int['Rating'] else ""
+                        st.markdown(f"**{icon} {date_str} - {row_int['Scout']} {rating_str}**")
+                        if row_int['rapport_tekst']: st.info(row_int['rapport_tekst'])
                         else: st.caption("Geen tekst.")
                         st.markdown("---")
             else: st.info("Nog geen interne scouting rapporten.")
@@ -368,9 +365,12 @@ try:
 
         if db_cols:
             with st.expander(f"Toon top 10 spelers die lijken op {selected_player_name}", expanded=False):
-                cols_str = ", ".join([f'a.{c}' for c in db_cols])
+                # FIX: a.position toegevoegd aan SELECT en a."column" voor Postgres veiligheid
+                cols_str = ", ".join([f'a."{c}"' for c in db_cols])
                 sim_query = f"""
-                    SELECT p.id as "playerId", p.commonname as "Naam", sq.name as "Team", i.season as "Seizoen", i."competitionName" as "Competitie", {cols_str}
+                    SELECT p.id as "playerId", p.commonname as "Naam", sq.name as "Team", 
+                           i.season as "Seizoen", i."competitionName" as "Competitie", 
+                           a.position, {cols_str}
                     FROM analysis.final_impect_scores a
                     JOIN public.players p ON CAST(a."playerId" AS TEXT) = CAST(p.id AS TEXT)
                     LEFT JOIN public.squads sq ON CAST(a."squadId" AS TEXT) = CAST(sq.id AS TEXT)
@@ -378,7 +378,10 @@ try:
                     WHERE a.position = %s AND i.season IN ('25/26', '2025')
                 """
                 try:
-                    df_all_p = run_query(sim_query, params=(row['position'],))
+                    # We gebruiken row['position'] die we bovenaan al succesvol hebben geverifieerd
+                    player_pos = row['position']
+                    df_all_p = run_query(sim_query, params=(player_pos,))
+                    
                     if not df_all_p.empty:
                         df_all_p['unique_id'] = df_all_p['playerId'].astype(str) + "_" + df_all_p['Seizoen']
                         df_all_p = df_all_p.drop_duplicates(subset=['unique_id']).set_index('unique_id')
@@ -408,8 +411,8 @@ try:
                                 event = st.dataframe(disp_df.style.applymap(color_sim, subset=['Gelijkenis %']).format({'Gelijkenis %': '{:.1f}%', 'Avg Score': '{:.1f}'}), use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
                                 
                                 if len(event.selection.rows) > 0:
-                                    idx = event.selection.rows[0]; cr = disp_df.iloc[idx]
-                                    st.session_state.pending_nav = {"season": cr['Seizoen'], "competition": cr['Competitie'], "target_name": cr['Naam'], "mode": "Spelers"}
+                                    idx_sel = event.selection.rows[0]; cr_sel = disp_df.iloc[idx_sel]
+                                    st.session_state.pending_nav = {"season": cr_sel['Seizoen'], "competition": cr_sel['Competitie'], "target_name": cr_sel['Naam'], "mode": "Spelers"}
                                     st.rerun()
                             else: st.warning("Geen spelers van dit niveau.")
                         else: st.warning("Huidige speler data niet compleet voor vergelijking.")
