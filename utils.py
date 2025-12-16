@@ -78,6 +78,26 @@ def show_sidebar_filters():
             
     return selected_season, iteration_id
 
+# 4. Club ophalen (Nieuw!)
+    selected_squad_id = None
+    if iteration_id:
+        squad_query = """
+            SELECT DISTINCT s.id, s.name 
+            FROM analysis.squads s
+            JOIN analysis.player_final_scores pfs ON s.id = pfs."squadId"
+            WHERE pfs."iterationId" = %s
+            ORDER BY s.name
+        """
+        df_squads = run_query(squad_query, (iteration_id,))
+        if not df_squads.empty:
+            squad_dict = dict(zip(df_squads['name'], df_squads['id']))
+            # Zet KVK (ID 362) als standaard indien beschikbaar
+            default_index = list(squad_dict.values()).index('362') if '362' in squad_dict.values() else 0
+            sel_squad_name = st.sidebar.selectbox("Club:", list(squad_dict.keys()), index=default_index)
+            selected_squad_id = squad_dict[sel_squad_name]
+
+    return season, iteration_id, selected_squad_id
+
 # -----------------------------------------------------------------------------
 # 3. CONFIGURATIES & MAPPINGS
 # -----------------------------------------------------------------------------
