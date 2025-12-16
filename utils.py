@@ -29,74 +29,53 @@ def run_query(query, params=None):
 # 2. ALGEMENE SIDEBAR
 # -----------------------------------------------------------------------------
 def show_sidebar_filters():
-    """
-    Deze functie toont de dropdowns voor Seizoen en Competitie in de sidebar
-    en geeft het geselecteerde Seizoen en Iteration ID terug.
-    """
     st.sidebar.header("1. Selecteer Data")
     
-    # 1. Seizoen ophalen
+    # 1. Seizoen
     season_query = "SELECT DISTINCT season FROM public.iterations ORDER BY season DESC;"
-    try:
-        df_seasons = run_query(season_query)
-        if df_seasons.empty:
-            st.error("Geen seizoenen gevonden in DB.")
-            return None, None
-            
-        seasons_list = df_seasons['season'].tolist()
-        
-        # Zorg dat er een standaardwaarde is in de sessie status
-        if "sb_season" not in st.session_state:
-            st.session_state.sb_season = seasons_list[0]
-            
-        selected_season = st.sidebar.selectbox("Seizoen:", seasons_list, key="sb_season")
-    except Exception as e:
-        st.error("Kon seizoenen niet laden.")
-        return None, None
+    df_seasons = run_query(season_query)
+    if df_seasons.empty: return None, None, None
+    seasons_list = df_seasons['season'].tolist()
+    selected_season = st.sidebar.selectbox("Seizoen:", seasons_list, key="sb_season")
 
-    # 2. Competitie ophalen
+    # 2. Competitie
     selected_competition = None
-    if selected_season:
-        comp_query = 'SELECT DISTINCT "competitionName" FROM public.iterations WHERE season = %s ORDER BY "competitionName";'
-        df_comps = run_query(comp_query, params=(selected_season,))
-        comps_list = df_comps['competitionName'].tolist()
-        
-        if "sb_competition" not in st.session_state and comps_list:
-             st.session_state.sb_competition = comps_list[0]
-             
-        selected_competition = st.sidebar.selectbox("Competitie:", comps_list, key="sb_competition")
-
-    # 3. Iteration ID ophalen (nodig voor alle queries)
     iteration_id = None
-    if selected_season and selected_competition:
-        id_query = 'SELECT id FROM public.iterations WHERE season = %s AND "competitionName" = %s LIMIT 1;'
-        df_id = run_query(id_query, params=(selected_season, selected_competition))
-        if not df_id.empty:
-            iteration_id = str(df_id.iloc[0]['id'])
-        else:
-            st.warning("Geen ID gevonden voor deze combinatie.")
-            
-    return selected_season, iteration_id
+    if selected_season:
+        comp_query = 'SELECT DISTINCT "competitionName", id FROM public.iterations WHERE season = %s ORDER BY "competitionName";'
+        df_comps = run_query(comp_query, params=(selected_season,))
+        if not df_comps.empty:
+            comp_dict = dict(zip(df_comps['competitionName'], df_comps['id']))
+            selected_competition = st.sidebar.selectbox("Competitie:", list(comp_dict.keys()), key="sb_competition")
+            iteration_id = str(comp_dict[selected_competition])
 
-# 4. Club ophalen (Nieuw!)
+    # 3. Club (SQUAD)
     selected_squad_id = None
     if iteration_id:
+        # We zoeken clubs die data hebben in de player_final_scores voor deze iteratie
         squad_query = """
             SELECT DISTINCT s.id, s.name 
             FROM analysis.squads s
-            JOIN analysis.player_final_scores pfs ON s.id = pfs."squadId"
-            WHERE pfs."iterationId" = %s
+            JOIN analysis.player_final_scores pfs ON s.id = pfs."squadId"::text
+            WHERE pfs."iterationId"::text = %s
             ORDER BY s.name
         """
         df_squads = run_query(squad_query, (iteration_id,))
+        
         if not df_squads.empty:
-            squad_dict = dict(zip(df_squads['name'], df_squads['id']))
-            # Zet KVK (ID 362) als standaard indien beschikbaar
-            default_index = list(squad_dict.values()).index('362') if '362' in squad_dict.values() else 0
-            sel_squad_name = st.sidebar.selectbox("Club:", list(squad_dict.keys()), index=default_index)
-            selected_squad_id = squad_dict[sel_squad_name]
+            squad_names = df_squads['name'].tolist()
+            squad_ids = df_squads['id'].tolist()
+            squad_map = dict(zip(squad_names, squad_ids))
+            
+            # Probeer KVK (362) als standaard te zetten
+            default_ix = 0
+            if '362' in squad_ids:
+                default_ix = squad_ids.index('362')
+                
+            sel_squad_name = st.sidebar.selectbox("Club:", squad_names, index=default_ix)
+            selected_squad_id = squad_map[sel_squad_name]
 
-    return season, iteration_id, selected_squad_id
+    return selected_season, iteration_id, selected_squad_id
 
 # -----------------------------------------------------------------------------
 # 3. CONFIGURATIES & MAPPINGS
