@@ -56,7 +56,15 @@ tab1, tab2, tab3, tab4 = st.tabs([
 # TAB 1: ALLE MATCH RAPPORTEN
 # =============================================================================
 with tab1:
-    st.header("Alle Scouting Rapporten")
+    # --- AANPASSING: Header met Refresh knop ernaast ---
+    col_head, col_btn = st.columns([6, 1])
+    with col_head:
+        st.header("Alle Scouting Rapporten")
+    with col_btn:
+        # Dit knopje leegt de cache zodat nieuwe data uit Postgres wordt gehaald
+        if st.button("🔄 Ververs Data", type="primary"):
+            st.cache_data.clear()
+            st.rerun()
     
     # Query (AANGEPAST: scouting.gebruikers ipv scouts)
     query = """
