@@ -13,7 +13,6 @@ st.markdown("Slimme import tool: leert van je keuzes om dubbele namen automatisc
 if 'import_df' not in st.session_state: st.session_state.import_df = None
 if 'current_index' not in st.session_state: st.session_state.current_index = 0
 if 'scout_map' not in st.session_state: st.session_state.scout_map = {}
-# NIEUW: Dit woordenboek onthoudt je keuzes (bv: "I. Halifa..." -> ID 104)
 if 'player_map' not in st.session_state: st.session_state.player_map = {}
 
 # -----------------------------------------------------------------------------
@@ -70,15 +69,28 @@ def save_legacy_report(row_data, db_player_id, scout_id):
         # Datum parsen
         date_val = pd.to_datetime(row_data.get('DATE')).date()
         
-        # Advies
-        advies = str(row_data.get('Advies', '')).strip()
+        # --- FIX: Advies Mapping ---
+        raw_advies = str(row_data.get('Advies', '')).strip()
         
-# NIEUW: Profiel Code (Fix: Forceer kleine letters)
+        # Hier vertalen we de Excel termen naar Database termen
+        advies_map = {
+            "Future Sign": "Future sign",  # De specifieke fix die je vroeg
+            "Sign": "Sign",                # Voor de zekerheid
+            "Follow": "Follow",            # Voor de zekerheid
+            "Not": "Not",                  # Voor de zekerheid
+            "nan": None,
+            "": None
+        }
+        
+        # Pak de vertaling, of als die niet bestaat, pak de originele waarde
+        advies = advies_map.get(raw_advies, raw_advies)
+        
+        # --- FIX: Profiel Code naar kleine letters ---
         raw_prof = str(row_data.get('Profile', '')).strip()
         if raw_prof == 'nan' or not raw_prof:
             profiel = None
         else:
-            profiel = raw_prof.lower() # <-- Hier maken we er '8b' van
+            profiel = raw_prof.lower() 
 
         # Tekst (Check beide kolommen)
         tekst = str(row_data.get('Resume', '')).strip()
@@ -166,7 +178,6 @@ else:
         
         if save_legacy_report(row, mapped_id, scout_id):
             st.session_state.current_index += 1
-            # We herladen direct om de volgende rij te pakken
             st.rerun()
     
     # --- UI LAYOUT (ALLEEN ALS NIET AUTOMATISCH GEMATCHED) ---
@@ -181,7 +192,10 @@ else:
         st.info(f"**Speler:** {legacy_player_name}")
         st.write(f"**Team:** {row.get('Team')}")
         st.write(f"**Datum:** {row.get('DATE')}")
+        
+        # Profiel & Advies tonen ter controle
         st.write(f"**Profiel:** {row.get('Profile')}")
+        st.write(f"**Advies:** {row.get('Advies')}")
         
         scout_email = str(row.get('SCOUT')).lower().strip()
         found_scout_id = st.session_state.scout_map.get(scout_email)
