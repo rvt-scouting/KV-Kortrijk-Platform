@@ -55,19 +55,33 @@ min_rating = st.sidebar.slider("Minimale Beoordeling", 1, 10, 1)
 show_only_gold = st.sidebar.checkbox("🏆 Toon enkel Gouden Buzzers")
 
 # -----------------------------------------------------------------------------
-# 2. TABS
+# 2. TABS OPBOUWEN (DYNAMISCH)
 # -----------------------------------------------------------------------------
-tab1, tab2, tab3, tab4 = st.tabs([
-    "📝 Alle Match Rapporten", 
-    "⭐ Shortlists", 
-    "📥 Aangeboden Spelers (Markt)",
-    "📈 Scout Statistieken"
-])
+
+# Basis tabs die iedereen ziet
+tab_titles = ["📝 Alle Match Rapporten", "⭐ Shortlists"]
+
+# Extra tabs alleen voor Level 2 en hoger
+if lvl > 1:
+    tab_titles.extend(["📥 Aangeboden Spelers (Markt)", "📈 Scout Statistieken"])
+
+# Maak de tabs aan
+all_tabs = st.tabs(tab_titles)
+
+# We wijzen ze toe aan variabelen voor leesbaarheid
+# Iedereen heeft index 0 en 1
+tab_reports = all_tabs[0]
+tab_shortlists = all_tabs[1]
+
+# Alleen toewijzen als ze bestaan (anders None)
+tab_market = all_tabs[2] if len(all_tabs) > 2 else None
+tab_stats = all_tabs[3] if len(all_tabs) > 3 else None
+
 
 # =============================================================================
 # TAB 1: ALLE MATCH RAPPORTEN (MET LEES MODUS)
 # =============================================================================
-with tab1:
+with tab_reports:
     col_head, col_btn = st.columns([6, 1])
     with col_head:
         st.header("Alle Scouting Rapporten")
@@ -188,7 +202,7 @@ with tab1:
 # =============================================================================
 # TAB 2: SHORTLISTS
 # =============================================================================
-with tab2:
+with tab_shortlists:
     st.header("🎯 Shortlists")
     try:
         # LOGICA LEVEL 1: Alleen eigen shortlists zien
@@ -232,46 +246,45 @@ with tab2:
     except Exception as e: st.error(f"Fout shortlists: {e}")
 
 # =============================================================================
-# TAB 3: AANGEBODEN SPELERS (MARKT) - ALLEEN ZICHTBAAR VOOR NIV 2+?
+# TAB 3: AANGEBODEN SPELERS (ALLEEN LEVEL 2+)
 # =============================================================================
-# Je kan ervoor kiezen dit te verbergen voor Level 1, of laten staan.
-# Ik laat het staan, maar je kan `if lvl > 1:` toevoegen als ze dit niet mogen zien.
-with tab3:
-    st.header("📥 Aangeboden Spelers")
-    status_filter = st.multiselect("Filter op Status", ["Interessant", "Te bekijken", "Onderhandeling", "In de gaten houden", "Afgekeurd"], default=["Interessant", "Te bekijken", "Onderhandeling"])
-    if status_filter:
-        q_market = f"""
-            SELECT p.commonname as "Naam", sq.name as "Huidig Team", EXTRACT(YEAR FROM AGE(p.birthdate)) as "Leeftijd",
-            o.status as "Status", o.vraagprijs as "Prijs (€)", o.makelaar as "Makelaar", o.opmerkingen as "Scoutingsverslag",
-            o.video_link as "Video", o.tmlink as "TM"
-            FROM scouting.offered_players o JOIN public.players p ON o.player_id = p.id
-            LEFT JOIN public.squads sq ON p."currentSquadId" = sq.id
-            WHERE o.status IN ({','.join([f"'{s}'" for s in status_filter])}) ORDER BY o.aangeboden_datum DESC
-        """
-        try:
-            df_market = run_query(q_market)
-            if not df_market.empty:
-                def color_status(val):
-                    color = 'black'
-                    if val == 'Interessant': color = '#27ae60' 
-                    elif val == 'Afgekeurd': color = '#c0392b' 
-                    elif val == 'Onderhandeling': color = '#f39c12' 
-                    return f'color: {color}; font-weight: bold'
-                st.dataframe(
-                    df_market.style.applymap(color_status, subset=['Status']), use_container_width=True, hide_index=True,
-                    column_config={"Prijs (€)": st.column_config.NumberColumn(format="€ %.2f"), "Video": st.column_config.LinkColumn("📺"), "TM": st.column_config.LinkColumn("TM"), "Scoutingsverslag": st.column_config.TextColumn(width="large")}
-                )
-            else: st.info("Geen spelers gevonden.")
-        except Exception as e: st.error(f"Fout markt: {e}")
-    else: st.warning("Selecteer status.")
+if tab_market:
+    with tab_market:
+        st.header("📥 Aangeboden Spelers")
+        status_filter = st.multiselect("Filter op Status", ["Interessant", "Te bekijken", "Onderhandeling", "In de gaten houden", "Afgekeurd"], default=["Interessant", "Te bekijken", "Onderhandeling"])
+        if status_filter:
+            q_market = f"""
+                SELECT p.commonname as "Naam", sq.name as "Huidig Team", EXTRACT(YEAR FROM AGE(p.birthdate)) as "Leeftijd",
+                o.status as "Status", o.vraagprijs as "Prijs (€)", o.makelaar as "Makelaar", o.opmerkingen as "Scoutingsverslag",
+                o.video_link as "Video", o.tmlink as "TM"
+                FROM scouting.offered_players o JOIN public.players p ON o.player_id = p.id
+                LEFT JOIN public.squads sq ON p."currentSquadId" = sq.id
+                WHERE o.status IN ({','.join([f"'{s}'" for s in status_filter])}) ORDER BY o.aangeboden_datum DESC
+            """
+            try:
+                df_market = run_query(q_market)
+                if not df_market.empty:
+                    def color_status(val):
+                        color = 'black'
+                        if val == 'Interessant': color = '#27ae60' 
+                        elif val == 'Afgekeurd': color = '#c0392b' 
+                        elif val == 'Onderhandeling': color = '#f39c12' 
+                        return f'color: {color}; font-weight: bold'
+                    st.dataframe(
+                        df_market.style.applymap(color_status, subset=['Status']), use_container_width=True, hide_index=True,
+                        column_config={"Prijs (€)": st.column_config.NumberColumn(format="€ %.2f"), "Video": st.column_config.LinkColumn("📺"), "TM": st.column_config.LinkColumn("TM"), "Scoutingsverslag": st.column_config.TextColumn(width="large")}
+                    )
+                else: st.info("Geen spelers gevonden.")
+            except Exception as e: st.error(f"Fout markt: {e}")
+        else: st.warning("Selecteer status.")
 
 # =============================================================================
-# TAB 4: SCOUT STATISTIEKEN (ALLEEN NIV 2+)
+# TAB 4: SCOUT STATISTIEKEN (ALLEEN LEVEL 2+)
 # =============================================================================
-with tab4:
-    st.header("📈 Activiteit Scouts")
-    
-    if lvl > 1:
+if tab_stats:
+    with tab_stats:
+        st.header("📈 Activiteit Scouts")
+        
         c1, c2 = st.columns(2)
         with c1:
             df_stats = run_query("SELECT s.naam as \"Scout\", COUNT(r.id) as \"Aantal Rapporten\" FROM scouting.rapporten r JOIN scouting.gebruikers s ON r.scout_id = s.id GROUP BY s.naam ORDER BY \"Aantal Rapporten\" DESC")
@@ -284,5 +297,3 @@ with tab4:
         df_log = run_query("SELECT r.aangemaakt_op, s.naam, COALESCE(p.commonname, r.custom_speler_naam) as speler, r.beoordeling FROM scouting.rapporten r JOIN scouting.gebruikers s ON r.scout_id = s.id LEFT JOIN public.players p ON r.speler_id = p.id ORDER BY r.aangemaakt_op DESC LIMIT 10")
         if not df_log.empty:
             for _, row in df_log.iterrows(): st.text(f"{row['aangemaakt_op'].strftime('%d-%m %H:%M')} - {row['naam']} scoutte {row['speler']} (Rating: {row['beoordeling']})")
-    else:
-        st.info("Statistieken zijn alleen zichtbaar voor management.")
