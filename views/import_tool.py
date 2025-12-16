@@ -46,8 +46,9 @@ def search_players_fuzzy(name_part):
     if "." in name_part:
         search_term = name_part.split('.')[-1].strip()
     
+    # FIX: Column name is 'birthdate', niet 'birthday'
     query = """
-        SELECT id, commonname, firstname, lastname, birthday
+        SELECT id, commonname, firstname, lastname, birthdate
         FROM public.players 
         WHERE commonname ILIKE %s OR lastname ILIKE %s 
         LIMIT 10
@@ -195,7 +196,7 @@ else:
                 # Card voor elke speler
                 c1, c2, c3 = st.columns([3, 2, 2])
                 with c1: st.write(f"**{db_row['commonname']}**")
-                with c2: st.caption(f"{db_row['firstname']} {db_row['lastname']}")
+                with c2: st.caption(f"{db_row['firstname']} {db_row['lastname']} ({db_row['birthdate']})")
                 with c3:
                     # DE KNOP: Koppelen en Opslaan
                     if st.button("Koppel & Opslaan", key=f"link_{db_row['id']}", type="primary"):
