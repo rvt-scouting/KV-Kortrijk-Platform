@@ -15,7 +15,7 @@ st.sidebar.header("🔍 Filters Rapporten")
 # Filter: Datum
 date_range = st.sidebar.date_input("Datum Periode", [])
 
-# Filter: Scouts (AANGEPAST: nu via scouting.gebruikers)
+# Filter: Scouts
 try:
     df_scouts = run_query("SELECT id, naam FROM scouting.gebruikers WHERE rol != 'Admin' ORDER BY naam")
     if not df_scouts.empty:
@@ -26,12 +26,11 @@ try:
 except:
     selected_scouts = []
 
-# Filter: Advies (NIEUW)
+# Filter: Advies
 try:
     df_advies = run_query("SELECT DISTINCT advies FROM scouting.rapporten WHERE advies IS NOT NULL ORDER BY advies")
     if not df_advies.empty:
         advies_opts = df_advies['advies'].tolist()
-        # Standaard alles selecteren of leeg laten (leeg = alles tonen)
         selected_advies = st.sidebar.multiselect("Filter op Advies", advies_opts)
     else:
         selected_advies = []
@@ -53,20 +52,17 @@ tab1, tab2, tab3, tab4 = st.tabs([
 ])
 
 # =============================================================================
-# TAB 1: ALLE MATCH RAPPORTEN
+# TAB 1: ALLE MATCH RAPPORTEN (MET LEES MODUS)
 # =============================================================================
 with tab1:
-    # --- AANPASSING: Header met Refresh knop ernaast ---
     col_head, col_btn = st.columns([6, 1])
     with col_head:
         st.header("Alle Scouting Rapporten")
     with col_btn:
-        # Dit knopje leegt de cache zodat nieuwe data uit Postgres wordt gehaald
         if st.button("🔄 Ververs Data", type="primary"):
             st.cache_data.clear()
             st.rerun()
     
-    # Query (AANGEPAST: scouting.gebruikers ipv scouts)
     query = """
         SELECT 
             r.id,
@@ -92,24 +88,14 @@ with tab1:
         df_reports = run_query(query)
         
         if not df_reports.empty:
-            # --- FILTERS TOEPASSEN ---
-            
-            # 1. Scout Filter
+            # --- FILTERS ---
             if selected_scouts:
                 df_reports = df_reports[df_reports['Scout'].isin(selected_scouts)]
-            
-            # 2. Advies Filter (NIEUW)
             if selected_advies:
                 df_reports = df_reports[df_reports['Advies'].isin(selected_advies)]
-
-            # 3. Rating Filter
             df_reports = df_reports[df_reports['Rating'] >= min_rating]
-            
-            # 4. Gold Filter
             if show_only_gold:
                 df_reports = df_reports[df_reports['Gold'] == True]
-
-            # 5. Datum Filter
             if len(date_range) == 2:
                 start_date, end_date = date_range
                 df_reports['Datum'] = pd.to_datetime(df_reports['Datum'])
@@ -118,32 +104,64 @@ with tab1:
                     (df_reports['Datum'].dt.date <= end_date)
                 ]
 
-            # --- WEERGAVE ---
-            st.markdown(f"**{len(df_reports)}** rapporten gevonden.")
-            
-            # STYLING FUNCTIE (NIEUW)
+            # Styling functie
             def color_advice(val):
-                # Check of de waarde bestaat en converteer naar string voor veiligheid
                 val_str = str(val).lower().strip()
-                if val_str in ['sign', 'future sign', 'a', 'a+']: # Voeg hier termen toe die groen moeten
-                    return 'color: #2ecc71; font-weight: bold' # Groen & Dikgedrukt
+                if val_str in ['sign', 'future sign', 'a', 'a+']:
+                    return 'color: #2ecc71; font-weight: bold'
                 return ''
+            
+            st.info("💡 **Tip:** Klik op een rij in de tabel om het volledige rapport te lezen!")
 
-            # Mooiere tabel met styling
-            st.dataframe(
+            # --- INTERACTIEVE TABEL ---
+            # We slaan het 'event' op om te zien wat er geselecteerd is
+            event = st.dataframe(
                 df_reports.style.applymap(color_advice, subset=['Advies']),
                 use_container_width=True,
                 hide_index=True,
+                on_select="rerun",          # Dit zorgt voor de interactie
+                selection_mode="single-row", # Je kan 1 rij tegelijk kiezen
                 column_config={
-                    "id": None, # Verberg ID
-                    "Datum": st.column_config.DatetimeColumn(format="DD-MM-YYYY HH:mm"),
+                    "id": None, 
+                    "Datum": st.column_config.DatetimeColumn(format="DD-MM-YYYY"),
                     "Rating": st.column_config.NumberColumn(format="%d/10"),
                     "Gold": st.column_config.CheckboxColumn("🏆"),
-                    "Rapport": st.column_config.TextColumn("Tekst", width="large"),
+                    "Rapport": st.column_config.TextColumn("Tekst", width="medium"), # Iets breder, maar detail view is beter
                 }
             )
+            
+            # --- DETAIL WEERGAVE ---
+            # Als er een rij geselecteerd is, toon dan de details
+            if len(event.selection.rows) > 0:
+                selected_idx = event.selection.rows[0]
+                # Let op: iloc pakt de rij uit de GEFILTERDE dataframe
+                row = df_reports.iloc[selected_idx]
+                
+                st.divider()
+                st.subheader(f"📄 Rapport Details: {row['Speler']}")
+                
+                # Mooie container voor het rapport
+                with st.container(border=True):
+                    # Bovenste balk met meta-data
+                    c1, c2, c3, c4 = st.columns(4)
+                    c1.markdown(f"**Scout:** {row['Scout']}")
+                    c2.markdown(f"**Wedstrijd:** {row['Wedstrijd']}")
+                    c3.markdown(f"**Beoordeling:** {row['Rating']}/10 {'🏆' if row['Gold'] else ''}")
+                    
+                    # Kleurtje voor advies
+                    advies_color = "green" if str(row['Advies']).lower() in ['sign', 'a', 'future sign'] else "orange"
+                    c4.markdown(f"**Advies:** :{advies_color}[{row['Advies']}]")
+                    
+                    st.divider()
+                    
+                    # De volledige tekst
+                    st.markdown("#### 📝 Analyse")
+                    st.markdown(row['Rapport'] if row['Rapport'] else "*Geen tekst ingevoerd.*")
+                    
+                    st.caption(f"Positie: {row['Positie']} | Datum rapport: {row['Datum']}")
+
         else:
-            st.info("Nog geen rapporten in de database.")
+            st.info("Geen rapporten gevonden.")
             
     except Exception as e:
         st.error(f"Fout bij laden rapporten: {e}")
@@ -153,17 +171,12 @@ with tab1:
 # =============================================================================
 with tab2:
     st.header("🎯 Shortlists")
-    
     try:
         sl_opts = run_query("SELECT id, naam FROM scouting.shortlists ORDER BY id")
-        
         if not sl_opts.empty:
             sl_tabs = st.tabs(sl_opts['naam'].tolist())
-            
             for i, row in sl_opts.iterrows():
                 sl_id = row['id']
-                sl_name = row['naam']
-                
                 with sl_tabs[i]:
                     q_sl = """
                         SELECT DISTINCT ON (r.speler_id, r.custom_speler_naam)
@@ -181,136 +194,62 @@ with tab2:
                         ORDER BY r.speler_id, r.custom_speler_naam, r.aangemaakt_op DESC
                     """
                     df_sl = run_query(q_sl, params=(sl_id,))
-                    
                     if not df_sl.empty:
-                        # Hier ook de groene styling toepassen!
                         def color_advice_simple(val):
                             val_str = str(val).lower().strip()
-                            if val_str in ['sign', 'future sign', 'a']:
-                                return 'color: #2ecc71; font-weight: bold'
+                            if val_str in ['sign', 'future sign', 'a']: return 'color: #2ecc71; font-weight: bold'
                             return ''
-
-                        st.dataframe(
-                            df_sl.style.applymap(color_advice_simple, subset=['Advies']), 
-                            use_container_width=True, 
-                            hide_index=True,
-                            column_config={
-                                "Datum": st.column_config.DateColumn(format="DD-MM-YYYY"),
-                                "Rating": st.column_config.NumberColumn(format="%d")
-                            }
-                        )
-                    else:
-                        st.info(f"Nog geen rapporten gekoppeld aan shortlist '{sl_name}'.")
-        else:
-            st.warning("Nog geen shortlists aangemaakt.")
-            
-    except Exception as e:
-        st.error(f"Fout bij laden shortlists: {e}")
+                        st.dataframe(df_sl.style.applymap(color_advice_simple, subset=['Advies']), use_container_width=True, hide_index=True)
+                    else: st.info(f"Nog geen rapporten.")
+        else: st.warning("Nog geen shortlists.")
+    except Exception as e: st.error(f"Fout shortlists: {e}")
 
 # =============================================================================
 # TAB 3: AANGEBODEN SPELERS (MARKT)
 # =============================================================================
 with tab3:
     st.header("📥 Aangeboden Spelers")
-    
-    status_filter = st.multiselect(
-        "Filter op Status", 
-        ["Interessant", "Te bekijken", "Onderhandeling", "In de gaten houden", "Afgekeurd"],
-        default=["Interessant", "Te bekijken", "Onderhandeling"]
-    )
-    
-    if not status_filter:
-        st.warning("Selecteer minstens één status.")
-        st.stop()
-        
-    q_market = f"""
-        SELECT 
-            p.commonname as "Naam",
-            sq.name as "Huidig Team",
-            EXTRACT(YEAR FROM AGE(p.birthdate)) as "Leeftijd",
-            o.status as "Status",
-            o.vraagprijs as "Prijs (€)",
-            o.makelaar as "Makelaar",
-            o.opmerkingen as "Scoutingsverslag",
-            o.video_link as "Video",
-            o.tmlink as "TM"
-        FROM scouting.offered_players o
-        JOIN public.players p ON o.player_id = p.id
-        LEFT JOIN public.squads sq ON p."currentSquadId" = sq.id
-        WHERE o.status IN ({','.join([f"'{s}'" for s in status_filter])})
-        ORDER BY o.aangeboden_datum DESC
-    """
-    
-    try:
-        df_market = run_query(q_market)
-        if not df_market.empty:
-            def color_status(val):
-                color = 'black'
-                if val == 'Interessant': color = '#27ae60' 
-                elif val == 'Afgekeurd': color = '#c0392b' 
-                elif val == 'Onderhandeling': color = '#f39c12' 
-                return f'color: {color}; font-weight: bold'
-
-            st.dataframe(
-                df_market.style.applymap(color_status, subset=['Status']),
-                use_container_width=True, 
-                hide_index=True,
-                column_config={
-                    "Prijs (€)": st.column_config.NumberColumn(format="€ %.2f"),
-                    "Video": st.column_config.LinkColumn("📺"),
-                    "TM": st.column_config.LinkColumn("TM"),
-                    "Scoutingsverslag": st.column_config.TextColumn(width="large")
-                }
-            )
-        else:
-            st.info("Geen spelers gevonden met deze status.")
-    except Exception as e:
-        st.error(f"Fout markt: {e}")
+    status_filter = st.multiselect("Filter op Status", ["Interessant", "Te bekijken", "Onderhandeling", "In de gaten houden", "Afgekeurd"], default=["Interessant", "Te bekijken", "Onderhandeling"])
+    if status_filter:
+        q_market = f"""
+            SELECT p.commonname as "Naam", sq.name as "Huidig Team", EXTRACT(YEAR FROM AGE(p.birthdate)) as "Leeftijd",
+            o.status as "Status", o.vraagprijs as "Prijs (€)", o.makelaar as "Makelaar", o.opmerkingen as "Scoutingsverslag",
+            o.video_link as "Video", o.tmlink as "TM"
+            FROM scouting.offered_players o JOIN public.players p ON o.player_id = p.id
+            LEFT JOIN public.squads sq ON p."currentSquadId" = sq.id
+            WHERE o.status IN ({','.join([f"'{s}'" for s in status_filter])}) ORDER BY o.aangeboden_datum DESC
+        """
+        try:
+            df_market = run_query(q_market)
+            if not df_market.empty:
+                def color_status(val):
+                    color = 'black'
+                    if val == 'Interessant': color = '#27ae60' 
+                    elif val == 'Afgekeurd': color = '#c0392b' 
+                    elif val == 'Onderhandeling': color = '#f39c12' 
+                    return f'color: {color}; font-weight: bold'
+                st.dataframe(
+                    df_market.style.applymap(color_status, subset=['Status']), use_container_width=True, hide_index=True,
+                    column_config={"Prijs (€)": st.column_config.NumberColumn(format="€ %.2f"), "Video": st.column_config.LinkColumn("📺"), "TM": st.column_config.LinkColumn("TM"), "Scoutingsverslag": st.column_config.TextColumn(width="large")}
+                )
+            else: st.info("Geen spelers gevonden.")
+        except Exception as e: st.error(f"Fout markt: {e}")
+    else: st.warning("Selecteer status.")
 
 # =============================================================================
 # TAB 4: SCOUT STATISTIEKEN
 # =============================================================================
 with tab4:
     st.header("📈 Activiteit Scouts")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        q_stats = """
-            SELECT s.naam as "Scout", COUNT(r.id) as "Aantal Rapporten"
-            FROM scouting.rapporten r
-            JOIN scouting.gebruikers s ON r.scout_id = s.id
-            GROUP BY s.naam
-            ORDER BY "Aantal Rapporten" DESC
-        """
-        df_stats = run_query(q_stats)
-        if not df_stats.empty:
-            fig = px.bar(df_stats, x="Scout", y="Aantal Rapporten", title="Rapporten per Scout", color="Aantal Rapporten", color_continuous_scale="Reds")
-            st.plotly_chart(fig, use_container_width=True)
-            
-    with col2:
-        q_adv = """
-            SELECT advies, COUNT(id) as "Aantal"
-            FROM scouting.rapporten
-            GROUP BY advies
-        """
-        df_adv = run_query(q_adv)
-        if not df_adv.empty:
-            fig2 = px.pie(df_adv, values="Aantal", names="advies", title="Verdeling Adviezen", hole=0.4, color_discrete_sequence=px.colors.sequential.RdBu)
-            st.plotly_chart(fig2, use_container_width=True)
+    c1, c2 = st.columns(2)
+    with c1:
+        df_stats = run_query("SELECT s.naam as \"Scout\", COUNT(r.id) as \"Aantal Rapporten\" FROM scouting.rapporten r JOIN scouting.gebruikers s ON r.scout_id = s.id GROUP BY s.naam ORDER BY \"Aantal Rapporten\" DESC")
+        if not df_stats.empty: st.plotly_chart(px.bar(df_stats, x="Scout", y="Aantal Rapporten", title="Rapporten per Scout", color="Aantal Rapporten", color_continuous_scale="Reds"), use_container_width=True)
+    with c2:
+        df_adv = run_query("SELECT advies, COUNT(id) as \"Aantal\" FROM scouting.rapporten GROUP BY advies")
+        if not df_adv.empty: st.plotly_chart(px.pie(df_adv, values="Aantal", names="advies", title="Verdeling Adviezen", hole=0.4, color_discrete_sequence=px.colors.sequential.RdBu), use_container_width=True)
 
-    st.markdown("---")
-    st.subheader("Laatste 10 Activiteiten")
-    q_log = """
-        SELECT r.aangemaakt_op, s.naam, 
-               COALESCE(p.commonname, r.custom_speler_naam) as speler, 
-               r.beoordeling
-        FROM scouting.rapporten r
-        JOIN scouting.gebruikers s ON r.scout_id = s.id
-        LEFT JOIN public.players p ON r.speler_id = p.id
-        ORDER BY r.aangemaakt_op DESC LIMIT 10
-    """
-    df_log = run_query(q_log)
+    st.markdown("---"); st.subheader("Laatste 10 Activiteiten")
+    df_log = run_query("SELECT r.aangemaakt_op, s.naam, COALESCE(p.commonname, r.custom_speler_naam) as speler, r.beoordeling FROM scouting.rapporten r JOIN scouting.gebruikers s ON r.scout_id = s.id LEFT JOIN public.players p ON r.speler_id = p.id ORDER BY r.aangemaakt_op DESC LIMIT 10")
     if not df_log.empty:
-        for _, row in df_log.iterrows():
-            st.text(f"{row['aangemaakt_op'].strftime('%d-%m %H:%M')} - {row['naam']} scoutte {row['speler']} (Rating: {row['beoordeling']})")
+        for _, row in df_log.iterrows(): st.text(f"{row['aangemaakt_op'].strftime('%d-%m %H:%M')} - {row['naam']} scoutte {row['speler']} (Rating: {row['beoordeling']})")
