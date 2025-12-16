@@ -2,7 +2,10 @@ import streamlit as st
 import psycopg2
 import pandas as pd
 
-# 1. DATABASE CONNECTIE
+
+# -----------------------------------------------------------------------------
+# 1. DATABASE CONNECTIE & QUERY FUNCTIE
+# -----------------------------------------------------------------------------
 def init_connection():
     return psycopg2.connect(
         host=st.secrets["postgres"]["host"],
@@ -22,28 +25,32 @@ def run_query(query, params=None):
     finally:
         conn.close()
 
-# 2. SIDEBAR FILTERS (Met KVK Defaults)
+# -----------------------------------------------------------------------------
+# 2. ALGEMENE SIDEBAR MET STANDAARDWAARDEN
+# -----------------------------------------------------------------------------
 def show_sidebar_filters():
     st.sidebar.header("1. Selecteer Data")
     
-    # Seizoen - Default 25/26
+    # 1. Seizoen - Standaard op '25/26'
     df_seasons = run_query("SELECT DISTINCT season FROM public.iterations ORDER BY season DESC;")
-    if df_seasons.empty: return None, None, None
+    if df_seasons.empty:
+        return None, None, None
+        
     seasons_list = df_seasons['season'].tolist()
     def_s_idx = seasons_list.index('25/26') if '25/26' in seasons_list else 0
-    selected_season = st.sidebar.selectbox("Seizoen:", seasons_list, index=def_s_idx)
+    selected_season = st.sidebar.selectbox("Seizoen:", seasons_list, index=def_s_idx, key="sb_season")
 
-    # Competitie - Default Challenger Pro League
+    # 2. Competitie - Standaard op 'Challenger Pro League'
     iteration_id = None
     df_comps = run_query('SELECT DISTINCT "competitionName", id FROM public.iterations WHERE season = %s', (selected_season,))
     if not df_comps.empty:
         comp_map = dict(zip(df_comps['competitionName'], df_comps['id']))
         comp_list = list(comp_map.keys())
         def_c_idx = comp_list.index('Challenger Pro League') if 'Challenger Pro League' in comp_list else 0
-        selected_comp = st.sidebar.selectbox("Competitie:", comp_list, index=def_c_idx)
+        selected_comp = st.sidebar.selectbox("Competitie:", comp_list, index=def_c_idx, key="sb_competition")
         iteration_id = str(comp_map[selected_comp])
 
-    # Club - Default KV Kortrijk (ID 362)
+    # 3. Club - Standaard op 'KV Kortrijk'
     selected_squad_id = None
     if iteration_id:
         squad_query = """
@@ -60,7 +67,6 @@ def show_sidebar_filters():
             selected_squad_id = sq_map[sel_sq]
 
     return selected_season, iteration_id, selected_squad_id
-
 # 3. CONFIGURATIES
 POSITION_METRICS = {
     "central_defender": {"aan_bal": [66, 58, 64, 10, 163], "zonder_bal": [103, 93, 32, 94, 17, 65, 92]},
