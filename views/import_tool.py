@@ -116,7 +116,6 @@ def get_existing_report_hashes():
 
 def search_players_fuzzy(name_part, limit=20):
     if not name_part or len(name_part) < 2: return pd.DataFrame()
-    
     term = f"%{name_part}%"
     q = f"""
         SELECT p.id, p.commonname, p.firstname, p.lastname, s.name as team_name
@@ -169,7 +168,7 @@ if st.session_state.import_df is None:
         try:
             df = pd.read_csv(uploaded_file)
             
-            # --- DEDUPLICATIE ---
+            # Deduplicatie
             if 'Resume' in df.columns:
                 with st.spinner("Controleren op duplicaten..."):
                     existing = get_existing_report_hashes()
@@ -220,29 +219,24 @@ else:
     # UI PROGRESS
     st.progress((idx / len(df)), text=f"Rij {idx + 1} / {len(df)}")
     
-    # KOLOMMEN
     col_source, col_edit, col_match = st.columns([1, 1, 1.5])
     
-    # ---------------------------------------------------------
-    # KOLOM 1: BRON DATA (Correctie: unieke keys per rij toegevoegd)
-    # ---------------------------------------------------------
+    # --- KOLOM 1: BRON (MET KEY FIX) ---
     with col_source:
         st.subheader("📄 Origineel")
         st.info(f"**{legacy_full_string}**")
         st.write(f"Team: {row.get('Team')}")
         st.write(f"Datum: {row.get('DATE')}")
         
-        # KEY FIX: key=f"orig_pos_{idx}" zorgt dat het veld ververst
+        # De keys zorgen ervoor dat deze velden verversen bij elke nieuwe rij
         st.text_input("CSV Positie", value=str(row.get('Starting Position')), disabled=True, key=f"orig_pos_{idx}")
         st.text_input("CSV Advies", value=str(row.get('Advies')), disabled=True, key=f"orig_adv_{idx}")
         
         scout_email = str(row.get('SCOUT')).lower().strip()
         found_scout_id = st.session_state.scout_map.get(scout_email, 1)
-        st.caption(f"Scout email: {scout_email} -> ID: {found_scout_id}")
+        st.caption(f"Scout: {scout_email} -> ID: {found_scout_id}")
 
-    # ---------------------------------------------------------
-    # KOLOM 2: CORRIGEER DATA
-    # ---------------------------------------------------------
+    # --- KOLOM 2: CORRIGEER (MET VEILIGE DEFAULT) ---
     with col_edit:
         st.subheader("✍️ Corrigeer")
         
@@ -258,11 +252,16 @@ else:
         
         final_pos = st.selectbox("Positie", valid_opts["posities"], index=default_pos_index, key=f"pos_{idx}")
 
-        # Advies
+        # Advies - VEILIGERE LOGICA
         raw_adv = str(row.get('Advies', '')).strip()
         mapping_adv = {"Future Sign": "A", "Sign": "A", "Follow": "B", "Not": "C"} 
         
-        default_adv_index = 0
+        # Default gedrag: Pak de laatste optie (vaak 'C' of 'Niet') als veilige fallback
+        # i.p.v. de eerste optie (die vaak 'A' is)
+        safe_fallback_index = len(valid_opts["advies"]) - 1 if valid_opts["advies"] else 0
+        default_adv_index = safe_fallback_index 
+        
+        # Check of we een match hebben
         if raw_adv in valid_opts["advies"]:
             default_adv_index = valid_opts["advies"].index(raw_adv)
         elif raw_adv in mapping_adv and mapping_adv[raw_adv] in valid_opts["advies"]:
@@ -281,16 +280,14 @@ else:
         try: final_date = pd.to_datetime(row.get('DATE')).date()
         except: final_date = datetime.date.today()
 
-    # ---------------------------------------------------------
-    # KOLOM 3: KOPPELEN
-    # ---------------------------------------------------------
+    # --- KOLOM 3: KOPPELEN ---
     with col_match:
         st.subheader("🔗 Koppel aan Database")
         
         save_packet = {
             "scout_id": found_scout_id,
             "positie": final_pos,
-            "advies": final_adv,
+            "advies": final_adv, # DIT is de waarde die wordt opgeslagen
             "rating": final_rating,
             "tekst": final_tekst,
             "datum": final_date,
@@ -298,11 +295,11 @@ else:
             "custom_naam": None
         }
 
-        # SITUATIE A: SPELER ZIT IN HET GEHEUGEN
+        # SCENARIO A: HERKEND
         if memory_match_id:
             db_player_text = get_player_details(memory_match_id)
-            st.success(f"🧠 **Herkend uit geheugen!**")
-            st.markdown(f"Wordt gekoppeld aan: **{db_player_text}**")
+            st.success(f"🧠 **Herkend!**")
+            st.markdown(f"Koppel aan: **{db_player_text}**")
             
             c_conf, c_edit = st.columns([2, 1])
             if c_conf.button("💾 Bevestig & Opslaan", type="primary", key=f"mem_save_{idx}"):
@@ -315,7 +312,7 @@ else:
                 del st.session_state.name_memory[legacy_full_string]
                 st.rerun()
 
-        # SITUATIE B: NIEUWE SPELER (ZOEKEN)
+        # SCENARIO B: ZOEKEN
         else:
             c_search, c_limit = st.columns([3, 1])
             with c_search:
@@ -338,7 +335,7 @@ else:
                                 st.session_state.current_index += 1
                                 st.rerun()
             else:
-                st.warning("Geen speler gevonden. Probeer een andere zoekterm of verhoog het aantal opties.")
+                st.warning("Geen speler gevonden. Probeer een andere zoekterm.")
 
             st.markdown("---")
             c_cust, c_skip = st.columns(2)
