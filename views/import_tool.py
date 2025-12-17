@@ -38,7 +38,6 @@ def run_uncached_query(query, params=None):
 
 # --- GEHEUGEN FUNCTIES ---
 def load_name_memory():
-    """Laadt alle opgeslagen koppelingen."""
     try:
         df = run_uncached_query("SELECT legacy_name, speler_id FROM scouting.legacy_names_map")
         if not df.empty:
@@ -47,7 +46,6 @@ def load_name_memory():
         return {} 
 
 def save_new_mapping(legacy_name, speler_id):
-    """Slaat een nieuwe koppeling op in de database."""
     conn = init_connection()
     try:
         with conn.cursor() as cur:
@@ -65,7 +63,6 @@ def save_new_mapping(legacy_name, speler_id):
         conn.close()
 
 def get_player_details(player_id):
-    """Haalt naam + team op van een ID."""
     q = """
         SELECT p.commonname, p.firstname, p.lastname, s.name as team_name
         FROM public.players p
@@ -79,7 +76,6 @@ def get_player_details(player_id):
     return "Onbekende speler"
 
 def parse_legacy_player_string(player_str):
-    """Haalt 'Naam - Team' uit elkaar voor betere zoekresultaten."""
     if not isinstance(player_str, str): return "", ""
     parts = player_str.split(' - ')
     if len(parts) >= 2:
@@ -118,17 +114,25 @@ def get_existing_report_hashes():
     except: pass
     return set()
 
-def search_players_fuzzy(name_part):
+def search_players_fuzzy(name_part, limit=20):
+    """
+    Zoekt spelers op basis van naam.
+    Nu met instelbare limiet en breder zoekbereik (ook voornaam).
+    """
     if not name_part or len(name_part) < 2: return pd.DataFrame()
-    # Zoek op commonname OF achternaam
+    
     term = f"%{name_part}%"
-    q = """
+    # We voegen firstname toe aan de zoekopdracht en maken de LIMIT variabel (%s)
+    q = f"""
         SELECT p.id, p.commonname, p.firstname, p.lastname, s.name as team_name
         FROM public.players p
         LEFT JOIN public.squads s ON p."currentSquadId" = s.id
-        WHERE p.commonname ILIKE %s OR p.lastname ILIKE %s LIMIT 10
+        WHERE p.commonname ILIKE %s 
+           OR p.lastname ILIKE %s 
+           OR p.firstname ILIKE %s
+        LIMIT {limit}
     """
-    return run_query(q, params=(term, term))
+    return run_query(q, params=(term, term, term))
 
 def save_legacy_report(data_dict):
     conn = None
@@ -175,7 +179,6 @@ if st.session_state.import_df is None:
                 with st.spinner("Controleren op duplicaten..."):
                     existing = get_existing_report_hashes()
                     df['norm'] = df['Resume'].apply(normalize_text)
-                    # Filter: tekst niet in DB én tekst niet leeg
                     df_clean = df[(~df['norm'].isin(existing)) & (df['norm'] != "")].drop(columns=['norm'])
                     
                     skipped = len(df) - len(df_clean)
@@ -213,20 +216,20 @@ else:
     row = df.iloc[idx]
     legacy_full_string = str(row.get('Player')).strip()
     
-    # 1. Check Geheugen
+    # Check Geheugen
     memory_match_id = st.session_state.name_memory.get(legacy_full_string)
     
-    # 2. Naam Parsing voor zoekfunctie (Splits 'Naam - Team')
+    # Parse Naam
     parsed_name_only, _ = parse_legacy_player_string(legacy_full_string)
 
     # UI PROGRESS
     st.progress((idx / len(df)), text=f"Rij {idx + 1} / {len(df)}")
     
-    # KOLOMMEN: TERUG NAAR DE ORIGINELE INDELING
+    # KOLOMMEN
     col_source, col_edit, col_match = st.columns([1, 1, 1.5])
     
     # ---------------------------------------------------------
-    # KOLOM 1: BRON DATA (LEES-MODUS)
+    # KOLOM 1: BRON DATA
     # ---------------------------------------------------------
     with col_source:
         st.subheader("📄 Origineel")
@@ -234,12 +237,11 @@ else:
         st.write(f"Team: {row.get('Team')}")
         st.write(f"Datum: {row.get('DATE')}")
         
-        # OUDE FUNCTIONALITEIT TERUG: Originele waardes tonen
         st.text_input("CSV Positie", value=str(row.get('Starting Position')), disabled=True, key="orig_pos")
         st.text_input("CSV Advies", value=str(row.get('Advies')), disabled=True, key="orig_adv")
         
         scout_email = str(row.get('SCOUT')).lower().strip()
-        found_scout_id = st.session_state.scout_map.get(scout_email, 1) # Default Admin (1)
+        found_scout_id = st.session_state.scout_map.get(scout_email, 1)
         st.caption(f"Scout email: {scout_email} -> ID: {found_scout_id}")
 
     # ---------------------------------------------------------
@@ -248,7 +250,7 @@ else:
     with col_edit:
         st.subheader("✍️ Corrigeer")
         
-        # Positie Mapping Logic
+        # Positie
         raw_pos = str(row.get('Starting Position', '')).strip()
         mapping_pos = {"WBL": "Verdediger", "WBR": "Verdediger", "CDM": "Middenvelder", "CAM": "Middenvelder", "CF": "Aanvaller"} 
         
@@ -260,7 +262,7 @@ else:
         
         final_pos = st.selectbox("Positie", valid_opts["posities"], index=default_pos_index, key=f"pos_{idx}")
 
-        # Advies Mapping Logic
+        # Advies
         raw_adv = str(row.get('Advies', '')).strip()
         mapping_adv = {"Future Sign": "A", "Sign": "A", "Follow": "B", "Not": "C"} 
         
@@ -284,7 +286,7 @@ else:
         except: final_date = datetime.date.today()
 
     # ---------------------------------------------------------
-    # KOLOM 3: KOPPELEN (MET GEHEUGEN)
+    # KOLOM 3: KOPPELEN (MET GEHEUGEN & MEER OPTIES)
     # ---------------------------------------------------------
     with col_match:
         st.subheader("🔗 Koppel aan Database")
@@ -319,26 +321,31 @@ else:
 
         # SITUATIE B: NIEUWE SPELER (ZOEKEN)
         else:
-            # We vullen de zoekbalk vooraf in met de 'gesplitste' naam (parsed_name_only)
-            # Hierdoor zoekt hij op 'Jantje' ipv 'Jantje - Ajax'
-            search_input = st.text_input("Zoek speler:", value=parsed_name_only, key=f"search_{idx}")
-            results = search_players_fuzzy(search_input)
+            # LAYOUT VOOR ZOEKEN + LIMIET
+            c_search, c_limit = st.columns([3, 1])
+            with c_search:
+                search_input = st.text_input("Zoek speler:", value=parsed_name_only, key=f"search_{idx}")
+            with c_limit:
+                # Hiermee kan je de lijst langer maken!
+                limit_val = st.number_input("# Opties", min_value=5, max_value=100, value=20, step=10)
+
+            results = search_players_fuzzy(search_input, limit=limit_val)
             
             if not results.empty:
-                st.write("Resultaten:")
-                for _, db_row in results.iterrows():
-                    # KNOP: Sla rapport op EN onthoud keuze voor de toekomst
-                    btn_label = f"🔗 {db_row['commonname']} ({db_row['team_name']})"
-                    if st.button(btn_label, key=f"btn_{db_row['id']}"):
-                        save_packet['speler_id'] = str(db_row['id'])
-                        
-                        if save_legacy_report(save_packet):
-                            # HIER SLAAN WE HET OP IN GEHEUGEN
-                            save_new_mapping(legacy_full_string, db_row['id'])
-                            st.session_state.current_index += 1
-                            st.rerun()
+                st.write(f"Resultaten ({len(results)}):")
+                # Scrollbare container als de lijst lang is (netjes voor UX)
+                with st.container(height=300, border=True):
+                    for _, db_row in results.iterrows():
+                        btn_label = f"🔗 {db_row['commonname']} ({db_row['team_name']})"
+                        if st.button(btn_label, key=f"btn_{db_row['id']}"):
+                            save_packet['speler_id'] = str(db_row['id'])
+                            
+                            if save_legacy_report(save_packet):
+                                save_new_mapping(legacy_full_string, db_row['id'])
+                                st.session_state.current_index += 1
+                                st.rerun()
             else:
-                st.warning("Geen speler gevonden in DB.")
+                st.warning("Geen speler gevonden. Probeer een andere zoekterm of verhoog het aantal opties.")
 
             st.markdown("---")
             c_cust, c_skip = st.columns(2)
