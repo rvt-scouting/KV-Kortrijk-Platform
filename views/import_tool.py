@@ -5,8 +5,8 @@ import datetime
 
 st.set_page_config(page_title="Legacy Data Import", page_icon="🧠", layout="wide")
 
-st.title("🧠 Slimme Import met Geheugen")
-st.markdown("Deze tool leert van je keuzes. Eerdere koppelingen worden onthouden.")
+st.title("🧠 Slimme Import Tool")
+st.markdown("Linker kolom toont de bron, midden correctie, rechts de database koppeling (met geheugen).")
 
 # -----------------------------------------------------------------------------
 # 0. INITIALISATIE SESSION STATE
@@ -36,23 +36,21 @@ def run_uncached_query(query, params=None):
     finally:
         conn.close()
 
-# --- GEHEUGEN FUNCTIES (NIEUW) ---
+# --- GEHEUGEN FUNCTIES ---
 def load_name_memory():
-    """Laadt alle opgeslagen koppelingen in een dictionary."""
+    """Laadt alle opgeslagen koppelingen."""
     try:
         df = run_uncached_query("SELECT legacy_name, speler_id FROM scouting.legacy_names_map")
         if not df.empty:
             return dict(zip(df['legacy_name'], df['speler_id']))
-    except Exception:
-        return {} # Tabel bestaat misschien nog niet
-    return {}
+    except:
+        return {} 
 
 def save_new_mapping(legacy_name, speler_id):
     """Slaat een nieuwe koppeling op in de database."""
     conn = init_connection()
     try:
         with conn.cursor() as cur:
-            # Upsert: Als naam al bestaat, update ID (voor de zekerheid)
             query = """
                 INSERT INTO scouting.legacy_names_map (legacy_name, speler_id)
                 VALUES (%s, %s)
@@ -60,15 +58,14 @@ def save_new_mapping(legacy_name, speler_id):
             """
             cur.execute(query, (legacy_name, speler_id))
             conn.commit()
-            # Update ook direct de sessie zodat we niet hoeven te herladen
             st.session_state.name_memory[legacy_name] = speler_id
     except Exception as e:
-        st.warning(f"Kon koppeling niet onthouden: {e}")
+        print(f"Kon niet opslaan in geheugen: {e}")
     finally:
         conn.close()
 
 def get_player_details(player_id):
-    """Haalt info op voor de automatische match weergave."""
+    """Haalt naam + team op van een ID."""
     q = """
         SELECT p.commonname, p.firstname, p.lastname, s.name as team_name
         FROM public.players p
@@ -81,14 +78,21 @@ def get_player_details(player_id):
         return f"{r['commonname']} ({r['team_name']})"
     return "Onbekende speler"
 
-# --- BESTAANDE FUNCTIES ---
+def parse_legacy_player_string(player_str):
+    """Haalt 'Naam - Team' uit elkaar voor betere zoekresultaten."""
+    if not isinstance(player_str, str): return "", ""
+    parts = player_str.split(' - ')
+    if len(parts) >= 2:
+        return parts[0].strip(), parts[1].strip()
+    return player_str.strip(), ""
+
+# --- DATA OPHALEN ---
 @st.cache_data
 def load_scout_map():
     try:
         df = run_query("SELECT id, email FROM scouting.gebruikers")
         return dict(zip(df['email'].str.lower().str.strip(), df['id']))
-    except:
-        return {}
+    except: return {}
 
 @st.cache_data
 def get_valid_options():
@@ -116,6 +120,7 @@ def get_existing_report_hashes():
 
 def search_players_fuzzy(name_part):
     if not name_part or len(name_part) < 2: return pd.DataFrame()
+    # Zoek op commonname OF achternaam
     term = f"%{name_part}%"
     q = """
         SELECT p.id, p.commonname, p.firstname, p.lastname, s.name as team_name
@@ -156,10 +161,10 @@ valid_opts = get_valid_options()
 
 if st.session_state.import_df is None:
     st.session_state.scout_map = load_scout_map()
-    st.session_state.name_memory = load_name_memory() # Laad geheugen!
+    st.session_state.name_memory = load_name_memory()
     
-    st.info(f"💡 Geheugen geladen: **{len(st.session_state.name_memory)}** bekende spelernamen.")
-    uploaded_file = st.file_uploader("Upload CSV", type=['csv'])
+    st.info(f"💡 Systeem klaar. {len(st.session_state.name_memory)} koppelingen in geheugen.")
+    uploaded_file = st.file_uploader("Upload CSV (Screening/Scouting)", type=['csv'])
     
     if uploaded_file:
         try:
@@ -167,13 +172,15 @@ if st.session_state.import_df is None:
             
             # --- DEDUPLICATIE ---
             if 'Resume' in df.columns:
-                with st.spinner("Checken op duplicaten..."):
+                with st.spinner("Controleren op duplicaten..."):
                     existing = get_existing_report_hashes()
                     df['norm'] = df['Resume'].apply(normalize_text)
+                    # Filter: tekst niet in DB én tekst niet leeg
                     df_clean = df[(~df['norm'].isin(existing)) & (df['norm'] != "")].drop(columns=['norm'])
                     
-                    if len(df_clean) < len(df):
-                        st.warning(f"📉 {len(df) - len(df_clean)} duplicaten overgeslagen.")
+                    skipped = len(df) - len(df_clean)
+                    if skipped > 0:
+                        st.warning(f"📉 {skipped} rapporten overgeslagen (al in database).")
             else:
                 df_clean = df
 
@@ -183,120 +190,164 @@ if st.session_state.import_df is None:
                     st.session_state.current_index = 0
                     st.rerun()
             else:
-                st.success("Alle rapporten staan al in de database!")
+                st.balloons()
+                st.success("✅ Alles is al verwerkt!")
         except Exception as e:
-            st.error(str(e))
+            st.error(f"Fout bij lezen CSV: {e}")
 
 # -----------------------------------------------------------------------------
-# 3. WIZARD MET GEHEUGEN
+# 3. WIZARD INTERFACE
 # -----------------------------------------------------------------------------
 else:
     df = st.session_state.import_df
     idx = st.session_state.current_index
     
     if idx >= len(df):
-        st.success("✅ Klaar! Alle rapporten verwerkt.")
-        if st.button("Nieuwe upload"):
+        st.balloons()
+        st.success("✅ Import Voltooid!")
+        if st.button("Nieuw bestand"):
             st.session_state.import_df = None
             st.rerun()
         st.stop()
         
     row = df.iloc[idx]
-    legacy_name = str(row.get('Player')).strip()
+    legacy_full_string = str(row.get('Player')).strip()
     
-    # Check Geheugen
-    memory_match_id = st.session_state.name_memory.get(legacy_name)
+    # 1. Check Geheugen
+    memory_match_id = st.session_state.name_memory.get(legacy_full_string)
+    
+    # 2. Naam Parsing voor zoekfunctie (Splits 'Naam - Team')
+    parsed_name_only, _ = parse_legacy_player_string(legacy_full_string)
 
-    # UI
-    progress = (idx / len(df))
-    st.progress(progress, text=f"Rij {idx + 1} / {len(df)}")
+    # UI PROGRESS
+    st.progress((idx / len(df)), text=f"Rij {idx + 1} / {len(df)}")
     
-    c1, c2, c3 = st.columns([1, 1, 1.5])
+    # KOLOMMEN: TERUG NAAR DE ORIGINELE INDELING
+    col_source, col_edit, col_match = st.columns([1, 1, 1.5])
     
-    with c1:
-        st.info(f"Origineel: **{legacy_name}**")
+    # ---------------------------------------------------------
+    # KOLOM 1: BRON DATA (LEES-MODUS)
+    # ---------------------------------------------------------
+    with col_source:
+        st.subheader("📄 Origineel")
+        st.info(f"**{legacy_full_string}**")
         st.write(f"Team: {row.get('Team')}")
-        st.caption(str(row.get('DATE')))
+        st.write(f"Datum: {row.get('DATE')}")
+        
+        # OUDE FUNCTIONALITEIT TERUG: Originele waardes tonen
+        st.text_input("CSV Positie", value=str(row.get('Starting Position')), disabled=True, key="orig_pos")
+        st.text_input("CSV Advies", value=str(row.get('Advies')), disabled=True, key="orig_adv")
+        
+        scout_email = str(row.get('SCOUT')).lower().strip()
+        found_scout_id = st.session_state.scout_map.get(scout_email, 1) # Default Admin (1)
+        st.caption(f"Scout email: {scout_email} -> ID: {found_scout_id}")
 
-    with c2:
-        # Quick Edit Form
-        pos_opts = valid_opts["posities"]
-        def_pos = 0
-        raw_pos = str(row.get('Starting Position', ''))
-        # Simpele mapping poging
-        if raw_pos in pos_opts: def_pos = pos_opts.index(raw_pos)
+    # ---------------------------------------------------------
+    # KOLOM 2: CORRIGEER DATA
+    # ---------------------------------------------------------
+    with col_edit:
+        st.subheader("✍️ Corrigeer")
         
-        final_pos = st.selectbox("Positie", pos_opts, index=def_pos, key=f"p{idx}")
+        # Positie Mapping Logic
+        raw_pos = str(row.get('Starting Position', '')).strip()
+        mapping_pos = {"WBL": "Verdediger", "WBR": "Verdediger", "CDM": "Middenvelder", "CAM": "Middenvelder", "CF": "Aanvaller"} 
         
-        # Advies
-        adv_opts = valid_opts["advies"]
-        final_adv = st.selectbox("Advies", adv_opts, key=f"a{idx}")
+        default_pos_index = 0
+        if raw_pos in valid_opts["posities"]:
+             default_pos_index = valid_opts["posities"].index(raw_pos)
+        elif raw_pos in mapping_pos and mapping_pos[raw_pos] in valid_opts["posities"]:
+             default_pos_index = valid_opts["posities"].index(mapping_pos[raw_pos])
         
+        final_pos = st.selectbox("Positie", valid_opts["posities"], index=default_pos_index, key=f"pos_{idx}")
+
+        # Advies Mapping Logic
+        raw_adv = str(row.get('Advies', '')).strip()
+        mapping_adv = {"Future Sign": "A", "Sign": "A", "Follow": "B", "Not": "C"} 
+        
+        default_adv_index = 0
+        if raw_adv in valid_opts["advies"]:
+            default_adv_index = valid_opts["advies"].index(raw_adv)
+        elif raw_adv in mapping_adv and mapping_adv[raw_adv] in valid_opts["advies"]:
+            default_adv_index = valid_opts["advies"].index(mapping_adv[raw_adv])
+            
+        final_adv = st.selectbox("Advies", valid_opts["advies"], index=default_adv_index, key=f"adv_{idx}")
+
         # Rating & Tekst
-        r = pd.to_numeric(row.get('Match Rating'), errors='coerce')
-        rate = st.slider("Rating", 1, 10, int(r*2) if not pd.isna(r) else 6, key=f"r{idx}")
+        raw_rating = pd.to_numeric(row.get('Match Rating'), errors='coerce')
+        final_rating = st.slider("Rating", 1, 10, int(raw_rating * 2) if not pd.isna(raw_rating) else 6, key=f"rat_{idx}")
         
-        txt = str(row.get('Resume', ''))
-        if txt == 'nan': txt = ""
-        final_txt = st.text_area("Tekst", txt, height=100, key=f"t{idx}")
+        raw_txt = str(row.get('Resume'))
+        if raw_txt == 'nan': raw_txt = str(row.get('Scouting Notes', ''))
+        final_tekst = st.text_area("Tekst", raw_txt, height=150, key=f"txt_{idx}")
         
-        # Datum
-        try: d = pd.to_datetime(row.get('DATE')).date()
-        except: d = datetime.date.today()
+        try: final_date = pd.to_datetime(row.get('DATE')).date()
+        except: final_date = datetime.date.today()
 
-    with c3:
-        st.subheader("🔗 Koppeling")
+    # ---------------------------------------------------------
+    # KOLOM 3: KOPPELEN (MET GEHEUGEN)
+    # ---------------------------------------------------------
+    with col_match:
+        st.subheader("🔗 Koppel aan Database")
         
-        # Bereid data voor
-        packet = {
-            "scout_id": st.session_state.scout_map.get(str(row.get('SCOUT')).lower().strip(), 1),
-            "positie": final_pos, "advies": final_adv, "rating": rate,
-            "tekst": final_txt, "datum": d, "speler_id": None, "custom_naam": None
+        save_packet = {
+            "scout_id": found_scout_id,
+            "positie": final_pos,
+            "advies": final_adv,
+            "rating": final_rating,
+            "tekst": final_tekst,
+            "datum": final_date,
+            "speler_id": None,
+            "custom_naam": None
         }
 
-        # SCENARIO 1: We kennen deze speler al!
+        # SITUATIE A: SPELER ZIT IN HET GEHEUGEN
         if memory_match_id:
-            player_info = get_player_details(memory_match_id)
-            st.success(f"✅ Herkend! Wordt gekoppeld aan:\n**{player_info}**")
+            db_player_text = get_player_details(memory_match_id)
+            st.success(f"🧠 **Herkend uit geheugen!**")
+            st.markdown(f"Wordt gekoppeld aan: **{db_player_text}**")
             
-            col_save, col_change = st.columns([2,1])
-            if col_save.button("💾 Bevestig & Opslaan", type="primary", key=f"auto_{idx}"):
-                packet['speler_id'] = str(memory_match_id)
-                if save_legacy_report(packet):
+            c_conf, c_edit = st.columns([2, 1])
+            if c_conf.button("💾 Bevestig & Opslaan", type="primary", key=f"mem_save_{idx}"):
+                save_packet['speler_id'] = str(memory_match_id)
+                if save_legacy_report(save_packet):
                     st.session_state.current_index += 1
                     st.rerun()
             
-            if col_change.button("Wijzig"):
-                # Verwijder tijdelijk uit geheugen sessie om zoeken mogelijk te maken
-                del st.session_state.name_memory[legacy_name]
+            if c_edit.button("Wijzig"):
+                del st.session_state.name_memory[legacy_full_string]
                 st.rerun()
 
-        # SCENARIO 2: Onbekend, zoek handmatig
+        # SITUATIE B: NIEUWE SPELER (ZOEKEN)
         else:
-            search = st.text_input("Zoek in DB", value=legacy_name, key=f"s{idx}")
-            res = search_players_fuzzy(search)
+            # We vullen de zoekbalk vooraf in met de 'gesplitste' naam (parsed_name_only)
+            # Hierdoor zoekt hij op 'Jantje' ipv 'Jantje - Ajax'
+            search_input = st.text_input("Zoek speler:", value=parsed_name_only, key=f"search_{idx}")
+            results = search_players_fuzzy(search_input)
             
-            if not res.empty:
-                for _, db_r in res.iterrows():
-                    # De knop slaat NU OOK op in het geheugen
-                    if st.button(f"🔗 Koppel: {db_r['commonname']} ({db_r['team_name']})", key=f"b{db_r['id']}"):
-                        packet['speler_id'] = str(db_r['id'])
+            if not results.empty:
+                st.write("Resultaten:")
+                for _, db_row in results.iterrows():
+                    # KNOP: Sla rapport op EN onthoud keuze voor de toekomst
+                    btn_label = f"🔗 {db_row['commonname']} ({db_row['team_name']})"
+                    if st.button(btn_label, key=f"btn_{db_row['id']}"):
+                        save_packet['speler_id'] = str(db_row['id'])
                         
-                        # 1. Sla rapport op
-                        if save_legacy_report(packet):
-                            # 2. LEER hiervan (Sla op in geheugen tabel)
-                            save_new_mapping(legacy_name, db_r['id'])
-                            
+                        if save_legacy_report(save_packet):
+                            # HIER SLAAN WE HET OP IN GEHEUGEN
+                            save_new_mapping(legacy_full_string, db_row['id'])
                             st.session_state.current_index += 1
                             st.rerun()
-            
+            else:
+                st.warning("Geen speler gevonden in DB.")
+
             st.markdown("---")
-            if st.button("Als Custom Opslaan (Geen DB link)"):
-                packet['custom_naam'] = legacy_name
-                save_legacy_report(packet)
-                st.session_state.current_index += 1
-                st.rerun()
+            c_cust, c_skip = st.columns(2)
+            if c_cust.button("💾 Custom Opslaan"):
+                save_packet['custom_naam'] = legacy_full_string
+                if save_legacy_report(save_packet):
+                    st.session_state.current_index += 1
+                    st.rerun()
             
-            if st.button("Overslaan"):
+            if c_skip.button("⏭️ Overslaan"):
                 st.session_state.current_index += 1
                 st.rerun()
