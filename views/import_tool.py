@@ -235,11 +235,11 @@ else:
         found_scout_id = st.session_state.scout_map.get(scout_email, 1)
         st.caption(f"Scout: {scout_email} -> ID: {found_scout_id}")
 
-    # --- KOLOM 2: CORRIGEER ---
+    # --- KOLOM 2: CORRIGEER (AANGEPAST AAN JOUW TERMEN) ---
     with col_edit:
         st.subheader("✍️ Corrigeer")
         
-        # Positie Mapping
+        # 1. POSITIE MAPPING
         raw_pos = str(row.get('Starting Position', '')).strip()
         mapping_pos = {
             "WBL": "Verdediger", "WBR": "Verdediger", "CDM": "Middenvelder", 
@@ -254,35 +254,56 @@ else:
         
         final_pos = st.selectbox("Positie", valid_opts["posities"], index=default_pos_index, key=f"pos_{idx}")
 
-        # Advies Mapping (UITGEBREID)
-        raw_adv = str(row.get('Advies', '')).strip()
-        
-        # Mapping: Links = CSV waarde, Rechts = DB Waarde (A, B, C etc.)
+        # 2. ADVIES MAPPING (CORRECTIE)
+        raw_adv_original = str(row.get('Advies', '')).strip()
+        raw_adv_lower = raw_adv_original.lower()
+
+        # Mapping: Links (CSV tekst lower) -> Rechts (Jouw Database Waarde)
         mapping_adv = {
-            # Oude
-            "Future Sign": "A", 
-            "Sign": "A", 
-            "Follow": "B", 
-            "Not": "C",
-            # Nieuwe aanvragen
-            "Get - Promising youngster": "A",
-            "Get - First team": "A",
-            "Get - Priority": "A",
-            "Get - Backup": "B"
+            # Je CSV varianten
+            "get - promising youngster": "Future Sign",
+            "get - first team": "Sign",
+            "get - priority": "Sign",
+            "get - backup": "Follow",
+            
+            # De standaard termen (zodat 'Future Sign' in CSV ook 'Future Sign' wordt in DB)
+            "future sign": "Future Sign",
+            "sign": "Sign",
+            "follow": "Follow",
+            "not": "Not"
         } 
         
-        # Safe fallback (laatste item in lijst)
-        safe_fallback_index = len(valid_opts["advies"]) - 1 if valid_opts["advies"] else 0
-        default_adv_index = safe_fallback_index 
+        # 2a. Bepaal Target
+        target_val = None
+        if raw_adv_lower in mapping_adv:
+            target_val = mapping_adv[raw_adv_lower]
         
-        if raw_adv in valid_opts["advies"]:
-            default_adv_index = valid_opts["advies"].index(raw_adv)
-        elif raw_adv in mapping_adv and mapping_adv[raw_adv] in valid_opts["advies"]:
-            default_adv_index = valid_opts["advies"].index(mapping_adv[raw_adv])
-            
-        final_adv = st.selectbox("Advies", valid_opts["advies"], index=default_adv_index, key=f"adv_{idx}")
+        # 2b. Zoek de index in de lijst
+        found_index = -1
+        
+        # Fallback: Laatste item
+        fallback_index = len(valid_opts["advies"]) - 1 if valid_opts["advies"] else 0
+        
+        if target_val:
+            for i, opt in enumerate(valid_opts["advies"]):
+                # We zoeken nu een optie die BEGINT met jouw term (bv "Sign" matcht "Sign" en "Sign - ...")
+                if str(opt).strip().upper().startswith(target_val.upper()):
+                    found_index = i
+                    break
+        
+        # Als nog niet gevonden, probeer exacte match
+        if found_index == -1:
+             if raw_adv_original in valid_opts["advies"]:
+                 found_index = valid_opts["advies"].index(raw_adv_original)
 
-        # Rating & Tekst
+        final_adv_index = found_index if found_index != -1 else fallback_index
+            
+        final_adv = st.selectbox("Advies", valid_opts["advies"], index=final_adv_index, key=f"adv_{idx}")
+        
+        # Debug Info verwijderd als het werkt, of laat staan voor controle:
+        st.caption(f"Match: '{raw_adv_original}' → '{target_val}'")
+
+        # 3. RATING & TEKST
         raw_rating = pd.to_numeric(row.get('Match Rating'), errors='coerce')
         final_rating = st.slider("Rating", 1, 10, int(raw_rating * 2) if not pd.isna(raw_rating) else 6, key=f"rat_{idx}")
         
@@ -308,7 +329,6 @@ else:
             "custom_naam": None
         }
 
-        # SCENARIO A: HERKEND
         if memory_match_id:
             db_player_text = get_player_details(memory_match_id)
             st.success(f"🧠 **Herkend!**")
@@ -325,7 +345,6 @@ else:
                 del st.session_state.name_memory[legacy_full_string]
                 st.rerun()
 
-        # SCENARIO B: ZOEKEN
         else:
             c_search, c_limit = st.columns([3, 1])
             with c_search:
