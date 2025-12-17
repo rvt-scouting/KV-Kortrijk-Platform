@@ -115,14 +115,9 @@ def get_existing_report_hashes():
     return set()
 
 def search_players_fuzzy(name_part, limit=20):
-    """
-    Zoekt spelers op basis van naam.
-    Nu met instelbare limiet en breder zoekbereik (ook voornaam).
-    """
     if not name_part or len(name_part) < 2: return pd.DataFrame()
     
     term = f"%{name_part}%"
-    # We voegen firstname toe aan de zoekopdracht en maken de LIMIT variabel (%s)
     q = f"""
         SELECT p.id, p.commonname, p.firstname, p.lastname, s.name as team_name
         FROM public.players p
@@ -229,7 +224,7 @@ else:
     col_source, col_edit, col_match = st.columns([1, 1, 1.5])
     
     # ---------------------------------------------------------
-    # KOLOM 1: BRON DATA
+    # KOLOM 1: BRON DATA (Correctie: unieke keys per rij toegevoegd)
     # ---------------------------------------------------------
     with col_source:
         st.subheader("📄 Origineel")
@@ -237,8 +232,9 @@ else:
         st.write(f"Team: {row.get('Team')}")
         st.write(f"Datum: {row.get('DATE')}")
         
-        st.text_input("CSV Positie", value=str(row.get('Starting Position')), disabled=True, key="orig_pos")
-        st.text_input("CSV Advies", value=str(row.get('Advies')), disabled=True, key="orig_adv")
+        # KEY FIX: key=f"orig_pos_{idx}" zorgt dat het veld ververst
+        st.text_input("CSV Positie", value=str(row.get('Starting Position')), disabled=True, key=f"orig_pos_{idx}")
+        st.text_input("CSV Advies", value=str(row.get('Advies')), disabled=True, key=f"orig_adv_{idx}")
         
         scout_email = str(row.get('SCOUT')).lower().strip()
         found_scout_id = st.session_state.scout_map.get(scout_email, 1)
@@ -286,7 +282,7 @@ else:
         except: final_date = datetime.date.today()
 
     # ---------------------------------------------------------
-    # KOLOM 3: KOPPELEN (MET GEHEUGEN & MEER OPTIES)
+    # KOLOM 3: KOPPELEN
     # ---------------------------------------------------------
     with col_match:
         st.subheader("🔗 Koppel aan Database")
@@ -321,19 +317,16 @@ else:
 
         # SITUATIE B: NIEUWE SPELER (ZOEKEN)
         else:
-            # LAYOUT VOOR ZOEKEN + LIMIET
             c_search, c_limit = st.columns([3, 1])
             with c_search:
                 search_input = st.text_input("Zoek speler:", value=parsed_name_only, key=f"search_{idx}")
             with c_limit:
-                # Hiermee kan je de lijst langer maken!
-                limit_val = st.number_input("# Opties", min_value=5, max_value=100, value=20, step=10)
+                limit_val = st.number_input("#", min_value=5, max_value=100, value=20, step=10, key=f"lim_{idx}")
 
             results = search_players_fuzzy(search_input, limit=limit_val)
             
             if not results.empty:
                 st.write(f"Resultaten ({len(results)}):")
-                # Scrollbare container als de lijst lang is (netjes voor UX)
                 with st.container(height=300, border=True):
                     for _, db_row in results.iterrows():
                         btn_label = f"🔗 {db_row['commonname']} ({db_row['team_name']})"
