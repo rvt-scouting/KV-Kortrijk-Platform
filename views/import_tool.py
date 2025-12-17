@@ -6,7 +6,7 @@ import datetime
 st.set_page_config(page_title="Legacy Data Import", page_icon="🏗️", layout="wide")
 
 st.title("🏗️ Legacy Data Import Tool")
-st.markdown("Slimme import tool: Corrigeer data & koppel aan DB.")
+st.markdown("Slimme import tool: Corrigeer data & koppel aan DB (slaat automatisch duplicaten over).")
 
 # -----------------------------------------------------------------------------
 # 0. INITIALISATIE SESSION STATE
@@ -36,7 +36,6 @@ def get_valid_options():
         # Posities
         df_pos = run_query("SELECT * FROM scouting.opties_posities")
         if not df_pos.empty:
-            # We gokken dat de eerste kolom de waarde is als er geen 'waarde' kolom is
             col = 'waarde' if 'waarde' in df_pos.columns else df_pos.columns[0]
             options["posities"] = df_pos[col].tolist()
         
@@ -49,6 +48,22 @@ def get_valid_options():
     except Exception as e:
         st.error(f"Kon opties niet laden: {e}")
     return options
+
+@st.cache_data
+def get_existing_report_texts():
+    """Haalt alle rapport teksten op (Resume) die al in de DB staan."""
+    try:
+        # We halen ALLE teksten op. Dit is snel genoeg omdat het alleen tekst is.
+        # We filteren lege teksten eruit.
+        query = "SELECT rapport_tekst FROM scouting.rapporten WHERE rapport_tekst IS NOT NULL"
+        df = run_query(query)
+        
+        if not df.empty:
+            # Maak een SET van gestripte strings voor supersnelle controle
+            return set(df['rapport_tekst'].str.strip().tolist())
+    except Exception as e:
+        st.error(f"Kon bestaande rapporten niet ophalen voor check: {e}")
+    return set()
 
 def parse_legacy_player_string(player_str):
     if not isinstance(player_str, str): return "", ""
@@ -76,7 +91,6 @@ def search_players_fuzzy(name_part):
 def save_legacy_report(data_dict):
     """
     Slaat het rapport op met reeds gevalideerde data uit de UI.
-    data_dict verwacht: scout_id, speler_id (of custom_naam), positie, advies, rating, tekst, datum
     """
     conn = None
     try:
@@ -111,24 +125,60 @@ def save_legacy_report(data_dict):
         if conn: conn.close()
 
 # -----------------------------------------------------------------------------
-# 2. SETUP & UPLOAD
+# 2. SETUP & UPLOAD MET DEDUPLICATIE
 # -----------------------------------------------------------------------------
 valid_opts = get_valid_options() # Haal DB opties op
 
 if st.session_state.import_df is None:
     st.session_state.scout_map = load_scout_map()
+    
+    st.info("💡 Tip: Het systeem checkt automatisch op basis van de tekst (Resume) of het rapport al bestaat.")
     uploaded_file = st.file_uploader("Upload CSV (Screening/Scouting)", type=['csv'])
     
     if uploaded_file:
         try:
             df = pd.read_csv(uploaded_file)
-            st.success(f"{len(df)} rijen geladen.")
-            if st.button("Start Import Proces"):
-                st.session_state.import_df = df
-                st.session_state.current_index = 0
-                st.rerun()
+            total_rows_csv = len(df)
+            
+            # --- DEDUPLICATIE LOGICA ---
+            if 'Resume' in df.columns:
+                with st.spinner("Bezig met controleren op duplicaten..."):
+                    existing_texts = get_existing_report_texts()
+                    
+                    # Maak tijdelijke kolom voor vergelijking (whitespace weghalen)
+                    df['check_text'] = df['Resume'].astype(str).str.strip()
+                    
+                    # Filter: behoud rijen waarvan tekst NIET in DB zit EN die niet leeg zijn
+                    # We gebruiken ~ (is NOT) .isin()
+                    df_clean = df[
+                        (~df['check_text'].isin(existing_texts)) & 
+                        (df['check_text'] != '') & 
+                        (df['check_text'] != 'nan')
+                    ].drop(columns=['check_text']) # Ruim hulpkolom op
+                    
+                    rows_skipped = total_rows_csv - len(df_clean)
+            else:
+                df_clean = df
+                rows_skipped = 0
+                st.warning("⚠️ Kolom 'Resume' niet gevonden in CSV, deduplicatie overgeslagen.")
+
+            # --- RESULTAAT TONEN & STARTKNOP ---
+            if rows_skipped > 0:
+                st.warning(f"📉 **{rows_skipped}** rapporten overgeslagen omdat ze al in de database staan.")
+            
+            if len(df_clean) > 0:
+                st.success(f"🚀 Klaar om **{len(df_clean)}** nieuwe rapporten te verwerken.")
+                
+                if st.button("Start Import Proces"):
+                    st.session_state.import_df = df_clean.reset_index(drop=True)
+                    st.session_state.current_index = 0
+                    st.rerun()
+            else:
+                st.balloons()
+                st.info("✅ Alle rapporten in deze CSV staan al in de database! Je hoeft niets te doen.")
+
         except Exception as e:
-            st.error(f"Kan bestand niet lezen: {e}")
+            st.error(f"Kan bestand niet verwerken: {e}")
 
 # -----------------------------------------------------------------------------
 # 3. MATCHING WIZARD
@@ -137,10 +187,11 @@ else:
     df = st.session_state.import_df
     idx = st.session_state.current_index
     
+    # Check of we klaar zijn
     if idx >= len(df):
         st.balloons()
-        st.success("✅ Import Voltooid!")
-        if st.button("Opnieuw"):
+        st.success("✅ Import Voltooid! Alle nieuwe rapporten zijn verwerkt.")
+        if st.button("Nieuw bestand uploaden"):
             st.session_state.import_df = None
             st.session_state.current_index = 0
             st.rerun()
@@ -169,7 +220,7 @@ else:
         st.text_input("CSV Advies", value=str(row.get('Advies')), disabled=True)
         
         scout_email = str(row.get('SCOUT')).lower().strip()
-        found_scout_id = st.session_state.scout_map.get(scout_email, 1)
+        found_scout_id = st.session_state.scout_map.get(scout_email, 1) # Default 1 als niet gevonden
 
     # ---------------------------------------------------------
     # KOLOM 2: CORRIGEER DATA (Cruciaal voor Foreign Keys)
@@ -179,10 +230,8 @@ else:
         
         # 1. POSITIE MAPPING LOGICA
         raw_pos = str(row.get('Starting Position', '')).strip()
-        # Mapping tabelletje voor legacy afkortingen naar DB waarden
         mapping_pos = {"WBL": "Verdediger", "WBR": "Verdediger", "CDM": "Middenvelder", "CAM": "Middenvelder", "CF": "Aanvaller"} 
         
-        # Probeer slim te matchen in de lijst van DB opties
         default_pos_index = 0
         if raw_pos in valid_opts["posities"]:
              default_pos_index = valid_opts["posities"].index(raw_pos)
@@ -193,7 +242,7 @@ else:
 
         # 2. ADVIES MAPPING LOGICA
         raw_adv = str(row.get('Advies', '')).strip()
-        mapping_adv = {"Future Sign": "A", "Sign": "A", "Follow": "B", "Not": "C"} # Pas aan naar jouw codes (A, B, C)
+        mapping_adv = {"Future Sign": "A", "Sign": "A", "Follow": "B", "Not": "C"} 
         
         default_adv_index = 0
         if raw_adv in valid_opts["advies"]:
