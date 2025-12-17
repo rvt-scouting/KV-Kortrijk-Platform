@@ -221,14 +221,13 @@ else:
     
     col_source, col_edit, col_match = st.columns([1, 1, 1.5])
     
-    # --- KOLOM 1: BRON (MET KEY FIX) ---
+    # --- KOLOM 1: BRON ---
     with col_source:
         st.subheader("📄 Origineel")
         st.info(f"**{legacy_full_string}**")
         st.write(f"Team: {row.get('Team')}")
         st.write(f"Datum: {row.get('DATE')}")
         
-        # De keys zorgen ervoor dat deze velden verversen bij elke nieuwe rij
         st.text_input("CSV Positie", value=str(row.get('Starting Position')), disabled=True, key=f"orig_pos_{idx}")
         st.text_input("CSV Advies", value=str(row.get('Advies')), disabled=True, key=f"orig_adv_{idx}")
         
@@ -236,13 +235,16 @@ else:
         found_scout_id = st.session_state.scout_map.get(scout_email, 1)
         st.caption(f"Scout: {scout_email} -> ID: {found_scout_id}")
 
-    # --- KOLOM 2: CORRIGEER (MET VEILIGE DEFAULT) ---
+    # --- KOLOM 2: CORRIGEER ---
     with col_edit:
         st.subheader("✍️ Corrigeer")
         
-        # Positie
+        # Positie Mapping
         raw_pos = str(row.get('Starting Position', '')).strip()
-        mapping_pos = {"WBL": "Verdediger", "WBR": "Verdediger", "CDM": "Middenvelder", "CAM": "Middenvelder", "CF": "Aanvaller"} 
+        mapping_pos = {
+            "WBL": "Verdediger", "WBR": "Verdediger", "CDM": "Middenvelder", 
+            "CAM": "Middenvelder", "CF": "Aanvaller"
+        } 
         
         default_pos_index = 0
         if raw_pos in valid_opts["posities"]:
@@ -252,16 +254,27 @@ else:
         
         final_pos = st.selectbox("Positie", valid_opts["posities"], index=default_pos_index, key=f"pos_{idx}")
 
-        # Advies - VEILIGERE LOGICA
+        # Advies Mapping (UITGEBREID)
         raw_adv = str(row.get('Advies', '')).strip()
-        mapping_adv = {"Future Sign": "A", "Sign": "A", "Follow": "B", "Not": "C"} 
         
-        # Default gedrag: Pak de laatste optie (vaak 'C' of 'Niet') als veilige fallback
-        # i.p.v. de eerste optie (die vaak 'A' is)
+        # Mapping: Links = CSV waarde, Rechts = DB Waarde (A, B, C etc.)
+        mapping_adv = {
+            # Oude
+            "Future Sign": "A", 
+            "Sign": "A", 
+            "Follow": "B", 
+            "Not": "C",
+            # Nieuwe aanvragen
+            "Get - Promising youngster": "A",
+            "Get - First team": "A",
+            "Get - Priority": "A",
+            "Get - Backup": "B"
+        } 
+        
+        # Safe fallback (laatste item in lijst)
         safe_fallback_index = len(valid_opts["advies"]) - 1 if valid_opts["advies"] else 0
         default_adv_index = safe_fallback_index 
         
-        # Check of we een match hebben
         if raw_adv in valid_opts["advies"]:
             default_adv_index = valid_opts["advies"].index(raw_adv)
         elif raw_adv in mapping_adv and mapping_adv[raw_adv] in valid_opts["advies"]:
@@ -287,7 +300,7 @@ else:
         save_packet = {
             "scout_id": found_scout_id,
             "positie": final_pos,
-            "advies": final_adv, # DIT is de waarde die wordt opgeslagen
+            "advies": final_adv,
             "rating": final_rating,
             "tekst": final_tekst,
             "datum": final_date,
