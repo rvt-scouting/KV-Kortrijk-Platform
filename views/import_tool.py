@@ -265,6 +265,7 @@ else:
             "get - first team": "Sign",
             "get - priority": "Sign",
             "get - backup": "Follow",
+            "nan": "Follow",
             
             # De standaard termen (zodat 'Future Sign' in CSV ook 'Future Sign' wordt in DB)
             "future sign": "Future Sign",
