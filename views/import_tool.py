@@ -6,7 +6,12 @@ import datetime
 st.set_page_config(page_title="Legacy Data Import", page_icon="🧠", layout="wide")
 
 st.title("🧠 Slimme Import Tool")
-st.markdown("Linker kolom toont de bron, midden correctie, rechts de database koppeling (met geheugen).")
+# Progressie balk staat nu bovenaan voor duidelijkheid tijdens auto-modus
+if 'import_df' in st.session_state and st.session_state.import_df is not None:
+    df = st.session_state.import_df
+    idx = st.session_state.current_index
+    if len(df) > 0:
+        st.progress((idx / len(df)), text=f"Verwerken: Rij {idx + 1} / {len(df)}")
 
 # -----------------------------------------------------------------------------
 # 0. INITIALISATIE SESSION STATE
@@ -199,6 +204,7 @@ else:
     df = st.session_state.import_df
     idx = st.session_state.current_index
     
+    # KLAAR CHECK
     if idx >= len(df):
         st.balloons()
         st.success("✅ Import Voltooid!")
@@ -213,11 +219,8 @@ else:
     # Check Geheugen
     memory_match_id = st.session_state.name_memory.get(legacy_full_string)
     
-    # Parse Naam
+    # Parse Naam voor zoeken
     parsed_name_only, _ = parse_legacy_player_string(legacy_full_string)
-
-    # UI PROGRESS
-    st.progress((idx / len(df)), text=f"Rij {idx + 1} / {len(df)}")
     
     col_source, col_edit, col_match = st.columns([1, 1, 1.5])
     
@@ -235,7 +238,7 @@ else:
         found_scout_id = st.session_state.scout_map.get(scout_email, 1)
         st.caption(f"Scout: {scout_email} -> ID: {found_scout_id}")
 
-    # --- KOLOM 2: CORRIGEER (AANGEPAST AAN JOUW TERMEN) ---
+    # --- KOLOM 2: CORRIGEER (AUTOMATISCH) ---
     with col_edit:
         st.subheader("✍️ Corrigeer")
         
@@ -254,55 +257,41 @@ else:
         
         final_pos = st.selectbox("Positie", valid_opts["posities"], index=default_pos_index, key=f"pos_{idx}")
 
-        # 2. ADVIES MAPPING (CORRECTIE)
+        # 2. ADVIES MAPPING
         raw_adv_original = str(row.get('Advies', '')).strip()
         raw_adv_lower = raw_adv_original.lower()
 
-        # Mapping: Links (CSV tekst lower) -> Rechts (Jouw Database Waarde)
         mapping_adv = {
-            # Je CSV varianten
             "get - promising youngster": "Future Sign",
             "get - first team": "Sign",
             "get - priority": "Sign",
             "get - backup": "Follow",
             "nan": "Follow",
-            
-            # De standaard termen (zodat 'Future Sign' in CSV ook 'Future Sign' wordt in DB)
             "future sign": "Future Sign",
             "sign": "Sign",
             "follow": "Follow",
             "not": "Not"
         } 
         
-        # 2a. Bepaal Target
         target_val = None
         if raw_adv_lower in mapping_adv:
             target_val = mapping_adv[raw_adv_lower]
         
-        # 2b. Zoek de index in de lijst
         found_index = -1
-        
-        # Fallback: Laatste item
         fallback_index = len(valid_opts["advies"]) - 1 if valid_opts["advies"] else 0
         
         if target_val:
             for i, opt in enumerate(valid_opts["advies"]):
-                # We zoeken nu een optie die BEGINT met jouw term (bv "Sign" matcht "Sign" en "Sign - ...")
                 if str(opt).strip().upper().startswith(target_val.upper()):
                     found_index = i
                     break
         
-        # Als nog niet gevonden, probeer exacte match
         if found_index == -1:
              if raw_adv_original in valid_opts["advies"]:
                  found_index = valid_opts["advies"].index(raw_adv_original)
 
         final_adv_index = found_index if found_index != -1 else fallback_index
-            
         final_adv = st.selectbox("Advies", valid_opts["advies"], index=final_adv_index, key=f"adv_{idx}")
-        
-        # Debug Info verwijderd als het werkt, of laat staan voor controle:
-        st.caption(f"Match: '{raw_adv_original}' → '{target_val}'")
 
         # 3. RATING & TEKST
         raw_rating = pd.to_numeric(row.get('Match Rating'), errors='coerce')
@@ -315,7 +304,7 @@ else:
         try: final_date = pd.to_datetime(row.get('DATE')).date()
         except: final_date = datetime.date.today()
 
-    # --- KOLOM 3: KOPPELEN ---
+    # --- KOLOM 3: KOPPELEN (NU MET AUTO-SAVE) ---
     with col_match:
         st.subheader("🔗 Koppel aan Database")
         
@@ -330,22 +319,20 @@ else:
             "custom_naam": None
         }
 
+        # --- AUTOMATISCHE ROUTE ---
         if memory_match_id:
+            # We tonen even kort wat er gebeurt (optioneel, gaat vaak te snel om te lezen)
             db_player_text = get_player_details(memory_match_id)
-            st.success(f"🧠 **Herkend!**")
-            st.markdown(f"Koppel aan: **{db_player_text}**")
+            st.success(f"⚡ **Auto-Match!** {legacy_full_string} -> {db_player_text}")
             
-            c_conf, c_edit = st.columns([2, 1])
-            if c_conf.button("💾 Bevestig & Opslaan", type="primary", key=f"mem_save_{idx}"):
-                save_packet['speler_id'] = str(memory_match_id)
-                if save_legacy_report(save_packet):
-                    st.session_state.current_index += 1
-                    st.rerun()
-            
-            if c_edit.button("Wijzig"):
-                del st.session_state.name_memory[legacy_full_string]
+            # DIRECT OPSLAAN EN DOORGAAN
+            save_packet['speler_id'] = str(memory_match_id)
+            if save_legacy_report(save_packet):
+                st.toast(f"✅ Opgeslagen: {legacy_full_string}") # Subtiele notificatie
+                st.session_state.current_index += 1
                 st.rerun()
 
+        # --- HANDMATIGE ROUTE (ALLEEN ALS NIET HERKEND) ---
         else:
             c_search, c_limit = st.columns([3, 1])
             with c_search:
@@ -364,6 +351,7 @@ else:
                             save_packet['speler_id'] = str(db_row['id'])
                             
                             if save_legacy_report(save_packet):
+                                # LEERMOMENT: Sla op in geheugen
                                 save_new_mapping(legacy_full_string, db_row['id'])
                                 st.session_state.current_index += 1
                                 st.rerun()
