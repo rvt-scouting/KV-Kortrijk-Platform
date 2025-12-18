@@ -1,192 +1,136 @@
 import streamlit as st
-import pandas as pd
-import plotly.express as px
-import numpy as np
-from utils import run_query, get_config_for_position, POSITION_METRICS, POSITION_KPIS
+from utils import check_login
 
 # -----------------------------------------------------------------------------
-# 1. PAGINA CONFIGURATIE
+# 1. SETUP
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="Speler Analyse", page_icon="⚽", layout="wide")
+st.set_page_config(
+    page_title="KVK Platform", 
+    page_icon="🔴", 
+    layout="wide",
+    initial_sidebar_state="expanded" 
+)
 
 # -----------------------------------------------------------------------------
-# 2. NAVIGATIE LOGICA
+# 2. LOGIN LOGICA
 # -----------------------------------------------------------------------------
-if "pending_nav" in st.session_state:
-    nav = st.session_state.pending_nav
-    if nav.get("mode") == "Spelers":
-        try:
-            st.session_state.sb_season = nav["season"]
-            st.session_state.sb_competition = nav["competition"]
-            st.session_state.sb_player = nav["target_name"]
-        except:
-            pass
-        del st.session_state.pending_nav
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+if "user_info" not in st.session_state:
+    st.session_state.user_info = None
 
-# -----------------------------------------------------------------------------
-# 3. SIDEBAR SELECTIE
-# -----------------------------------------------------------------------------
-st.sidebar.header("1. Selecteer Data")
+def login_screen():
+    st.title("🔴⚪ KVK Login")
+    with st.form("login"):
+        email = st.text_input("Email")
+        pwd = st.text_input("Wachtwoord", type="password")
+        if st.form_submit_button("Inloggen"):
+            user = check_login(email, pwd)
+            if user:
+                st.session_state.logged_in = True
+                st.session_state.user_info = user
+                st.rerun()
+            else:
+                st.error("Fout: Ongeldige inloggegevens of account inactief.")
 
-try:
-    df_seasons = run_query("SELECT DISTINCT season FROM public.iterations ORDER BY season DESC;")
-    seasons_list = df_seasons['season'].tolist()
-    if "sb_season" not in st.session_state and seasons_list:
-        st.session_state.sb_season = seasons_list[0]
-    selected_season = st.sidebar.selectbox("Seizoen:", seasons_list, key="sb_season")
-except:
-    st.error("Fout bij laden seizoenen."); st.stop()
-
-if selected_season:
-    df_competitions = run_query('SELECT DISTINCT "competitionName" FROM public.iterations WHERE season = %s ORDER BY "competitionName";', params=(selected_season,))
-    competitions_list = df_competitions['competitionName'].tolist()
-    if "sb_competition" not in st.session_state and competitions_list:
-         st.session_state.sb_competition = competitions_list[0]
-    selected_competition = st.sidebar.selectbox("Competitie:", competitions_list, key="sb_competition")
-else: selected_competition = None
-
-selected_iteration_id = None
-if selected_season and selected_competition:
-    df_details = run_query('SELECT id FROM public.iterations WHERE season = %s AND "competitionName" = %s LIMIT 1;', params=(selected_season, selected_competition))
-    if not df_details.empty:
-        selected_iteration_id = str(df_details.iloc[0]['id'])
-    else: st.stop() 
-else: st.stop() 
+def logout():
+    st.session_state.logged_in = False
+    st.session_state.user_info = None
+    st.rerun()
 
 # -----------------------------------------------------------------------------
-# 4. SPELER SELECTIE (Bron: player_kpis voor 100% dekking)
+# 3. PAGINA DEFINITIES
 # -----------------------------------------------------------------------------
-st.sidebar.divider()
-st.sidebar.header("2. Speler Zoeken")
+def welcome():
+    st.title(f"Welkom {st.session_state.user_info.get('naam')}")
+    st.info(f"Je bent ingelogd als: {st.session_state.user_info.get('rol')} (Niveau {st.session_state.user_info.get('toegangsniveau')})")
+    st.write("Gebruik het menu links om te navigeren.")
 
-players_query = """
-    SELECT DISTINCT p.commonname, p.id as "playerId", sq.name as "squadName"
-    FROM public.player_kpis pk
-    JOIN public.players p ON CAST(pk."playerId" AS TEXT) = p.id
-    LEFT JOIN public.squads sq ON CAST(pk."squadId" AS TEXT) = sq.id
-    WHERE CAST(pk."iterationId" AS TEXT) = %s
-    ORDER BY p.commonname;
-"""
-try:
-    df_players = run_query(players_query, params=(selected_iteration_id,))
-    unique_names = df_players['commonname'].unique().tolist()
+def test_page_func():
+    st.title("👤 Mijn Profiel")
+    st.write(f"Naam: {st.session_state.user_info.get('naam')}")
+    st.write(f"Rol: {st.session_state.user_info.get('rol')}")
+    st.write(f"Email: {st.session_state.user_info.get('email', '-')}")
+
+# A. Basis Pagina's
+pg_home = st.Page(welcome, title="Home", icon="🏠")
+pg_profile = st.Page(test_page_func, title="Mijn Profiel", icon="👤")
+
+# B. Hoofd Analyse
+pg_kvk = st.Page("views/11_🔴_KV_Kortrijk.py", title="KV Kortrijk", icon="🔴")
+pg_player_analysis = st.Page("views/1_⚽_Spelers.py", title="Spelers Analyse", icon="⚽")
+pg_team_analysis = st.Page("views/10_🛡️_Teams.py", title="Team Analyse", icon="🛡️")
+
+# C. Scouting Modules
+pg_scout = st.Page("views/4_📝_Scouting.py", title="Scout Rapport Maken", icon="📝")
+pg_shortlists = st.Page("views/9_🎯_Shortlists.py", title="Shortlists Aanvullen", icon="🎯")
+pg_dashboard = st.Page("views/7_📊_Scouting_Overzicht.py", title="Scouting Dashboard", icon="📈")
+pg_offer = st.Page("views/6_📥_Aangeboden.py", title="Transfermarkt (Aangeboden)", icon="📥")
+pg_disc = st.Page("views/5_🔎_Discover.py", title="Data Discover", icon="🔎")
+
+# D. NIEUW: Intelligence (Dossiers)
+pg_intelligence = st.Page("views/12_🧠_Intelligence.py", title="Speler Dossier", icon="🧠")
+
+# E. Performance Modules
+pg_match = st.Page("views/3_📊_Wedstrijden.py", title="Wedstrijd Analyse", icon="📊")
+pg_coach = st.Page("views/2_👔_Coaches.py", title="Coach Profielen", icon="👔")
+
+# F. Beheer
+pg_admin = st.Page("views/8_⚙️_Admin.py", title="Admin Beheer", icon="⚙️")
+pg_import = st.Page("views/import_tool.py", title="Legacy Import Tool", icon="🏗️")
+
+# -----------------------------------------------------------------------------
+# 4. NAVIGATIE BOUWER
+# -----------------------------------------------------------------------------
+if not st.session_state.logged_in:
+    login_screen()
+else:
+    # Veilig ophalen van toegangsniveau
+    try:
+        lvl = int(st.session_state.user_info.get('toegangsniveau', 0))
+    except (ValueError, TypeError):
+        lvl = 0
+
+    pages = {}
     
-    idx_p = 0
-    if "sb_player" in st.session_state and st.session_state.sb_player in unique_names:
-        idx_p = unique_names.index(st.session_state.sb_player)
+    # 1. Algemeen (Altijd zichtbaar)
+    pages["Algemeen"] = [pg_home, pg_profile]
+
+    # 2. Logica per rol/niveau
+    if lvl == 1:
+        # Niveau 1: Alleen Scouting tools
+        pages["Scouting"] = [pg_scout, pg_shortlists, pg_dashboard]
+
+    elif lvl == 2:
+        # Niveau 2: Alleen Performance data
+        pages["Performance"] = [pg_match]
+
+    elif lvl >= 3:
+        # Niveau 3+: Volledige toegang
+        pages["🔍 Hoofd Analyse"] = [pg_kvk, pg_player_analysis, pg_team_analysis]
         
-    selected_player_name = st.sidebar.selectbox("Kies een speler:", unique_names, index=idx_p, key="sb_player")
-    
-    cand = df_players[df_players['commonname'] == selected_player_name]
-    if len(cand) > 1:
-        squad_sel = st.sidebar.selectbox("Kies team:", cand['squadName'].tolist())
-        final_player_id = cand[cand['squadName'] == squad_sel].iloc[0]['playerId']
-    else:
-        final_player_id = cand.iloc[0]['playerId']
-except:
-    st.error("Speler selectie mislukt."); st.stop()
+        pages["Scouting & Markt"] = [
+            pg_dashboard, 
+            pg_scout, 
+            pg_shortlists, 
+            pg_intelligence, # Het strategisch dossier
+            pg_offer, 
+            pg_disc
+        ]
+        
+        pages["Performance Data"] = [pg_match, pg_coach]
+        pages["Beheer"] = [pg_admin, pg_import]
 
-# -----------------------------------------------------------------------------
-# 5. DASHBOARD
-# -----------------------------------------------------------------------------
-st.title(f"🏃‍♂️ {selected_player_name}")
+    # Sidebar Styling
+    with st.sidebar:
+        st.title("KV Kortrijk")
+        
+    # Navigatie uitvoeren
+    pg = st.navigation(pages)
+    pg.run()
 
-# A. TRANSFER STATUS
-check_off = "SELECT status, makelaar FROM scouting.offered_players WHERE player_id = %s ORDER BY aangeboden_datum DESC LIMIT 1"
-df_off = run_query(check_off, params=(str(final_player_id),))
-if not df_off.empty:
-    st.warning(f"📥 Aangeboden via {df_off.iloc[0]['makelaar']} (Status: {df_off.iloc[0]['status']})")
-
-# B. DATA SCORES
-score_query = """
-    SELECT p.*, a.*, sq_curr.name as "current_team_name"
-    FROM public.players p
-    LEFT JOIN analysis.final_impect_scores a ON p.id = a."playerId" AND CAST(a."iterationId" AS TEXT) = %s
-    LEFT JOIN public.squads sq_curr ON p."currentSquadId" = sq_curr.id
-    WHERE p.id = %s
-"""
-df_scores = run_query(score_query, params=(selected_iteration_id, str(final_player_id)))
-
-if not df_scores.empty:
-    row = df_scores.iloc[0]
-    c1, c2, c3, c4 = st.columns(4)
-    with c1: st.metric("Team", row['current_team_name'] or "Onbekend")
-    with c2: st.metric("Geboortedatum", str(row.get('birthdate', '-')))
-    with c3: st.metric("Geboorteplaats", row.get('birthplace', '-'))
-    with c4: st.metric("Voet", row.get('leg', '-'))
-
-    # Check op berekende data
-    if pd.isna(row.get('position')):
-        st.info("ℹ️ Geen berekende Impect-scores (te weinig minuten).")
-    else:
+    # Uitloggen knop onderaan de sidebar
+    with st.sidebar:
         st.divider()
-        st.subheader(f"📊 Prestatie Profiel: {row['position']}")
-        
-        profile_mapping = {
-            "KVK CV": row.get('cb_kvk_score'), "KVK Wingback": row.get('wb_kvk_score'),
-            "KVK Def Mid": row.get('dm_kvk_score'), "KVK Cen Mid": row.get('cm_kvk_score'),
-            "KVK Att Mid": row.get('acm_kvk_score'), "KVK Flank": row.get('fa_kvk_score'),
-            "KVK Spits": row.get('fw_kvk_score'), "Afmaker": row.get('fw_finisher_kvk_score')
-        }
-        df_chart = pd.DataFrame([{"Profiel": k, "Score": v} for k, v in profile_mapping.items() if v and v > 0])
-        
-        ca, cb = st.columns([1, 2])
-        with ca:
-            st.dataframe(df_chart, use_container_width=True, hide_index=True)
-        with cb:
-            fig = px.line_polar(df_chart, r='Score', theta='Profiel', line_close=True)
-            fig.update_traces(fill='toself', line_color='#d71920')
-            st.plotly_chart(fig, use_container_width=True)
-
-        # KPIs & METRIEKEN
-        m_cfg = get_config_for_position(row['position'], POSITION_METRICS)
-        k_cfg = get_config_for_position(row['position'], POSITION_KPIS)
-        
-        c_m, c_k = st.columns(2)
-        with c_m:
-            st.write("**Metrieken**")
-            # Logica voor ophalen metrieken tabel (zie eerdere versies voor detail)
-        with c_k:
-            st.write("**KPIs**")
-            # Logica voor ophalen KPI tabel
-
-    # C. SKILLCORNER
-    st.divider()
-    st.subheader("💪 Fysieke Data (SkillCorner)")
-    # Query en tabel weergave voor fysieke data
-
-    # D. SCOUTING (INTERN)
-    st.divider()
-    st.subheader("🕵️ Scouting Rapporten (Intern)")
-    q_scout = "SELECT r.*, g.naam FROM scouting.rapporten r JOIN scouting.gebruikers g ON r.scout_id = g.id WHERE speler_id = %s ORDER BY aangemaakt_op DESC"
-    df_sc = run_query(q_scout, params=(str(final_player_id),))
-    if not df_sc.empty:
-        st.dataframe(df_sc[['aangemaakt_op', 'naam', 'beoordeling', 'advies']], use_container_width=True, hide_index=True)
-        with st.expander("Lees teksten"):
-            for _, r in df_sc.iterrows(): st.info(f"{r['naam']}: {r['rapport_tekst']}")
-
-    # E. INTELLIGENCE (STRATEGISCH)
-    st.divider()
-    st.subheader("🧠 Strategisch Dossier (Intelligence)")
-    intel_q = "SELECT * FROM scouting.speler_intelligence WHERE speler_id = %s ORDER BY laatst_bijgewerkt DESC LIMIT 1"
-    df_i = run_query(intel_q, params=(str(final_player_id),))
-    if not df_i.empty:
-        ir = df_i.iloc[0]
-        l1, l2, l3 = st.columns(3)
-        with l1: 
-            if ir.get('instagram_url'): st.link_button("📸 Instagram", ir['instagram_url'])
-        with l2: 
-            if ir.get('transfermarkt_url'): st.link_button("⚽ Transfermarkt", ir['transfermarkt_url'])
-        
-        ia, ib = st.columns(2)
-        with ia:
-            st.info(f"**Club/Netwerk:**\n{ir['club_informatie']}")
-            st.info(f"**Familie:**\n{ir['familie_achtergrond']}")
-        with ib:
-            st.warning(f"**Mentaliteit:**\n{ir['persoonlijkheid']}")
-            st.error(f"**Makelaar:**\n{ir['makelaar_details']}")
-
-    # F. SIMILARITY
-    st.divider()
-    st.subheader("👯 Vergelijkbare Spelers")
-    # Similarity logica zoals eerder gedefinieerd
+        if st.button("Uitloggen"):
+            logout()
