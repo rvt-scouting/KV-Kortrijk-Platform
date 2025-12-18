@@ -290,8 +290,26 @@ try:
             else: st.info("Nog geen interne scouting rapporten.")
         except Exception as e: st.error(f"Fout: {e}")
 
+        st.markdown("---"); st.subheader("📑 Data Scout Rapporten (Extern)")
+        reports_query = """
+            SELECT m."scheduledDate" as "Datum", sq_h.name as "Thuisploeg", sq_a.name as "Uitploeg", r.position as "Positie", r.label as "Verdict"
+            FROM analysis.scouting_reports r JOIN public.matches m ON r."matchId" = m.id LEFT JOIN public.squads sq_h ON m."homeSquadId" = sq_h.id LEFT JOIN public.squads sq_a ON m."awaySquadId" = sq_a.id
+            WHERE r."iterationId" = %s AND r."playerId" = %s AND m.available = true ORDER BY m."scheduledDate" DESC
+        """
+        try:
+            df_rep = run_query(reports_query, params=(selected_iteration_id, p_player_id))
+            if not df_rep.empty:
+                c1, c2 = st.columns([2, 1])
+                with c1: st.dataframe(df_rep, use_container_width=True, hide_index=True)
+                with c2:
+                    vc = df_rep['Verdict'].value_counts().reset_index(); vc.columns=['Verdict','Aantal']
+                    fig = px.pie(vc, values='Aantal', names='Verdict', hole=0.4, color_discrete_sequence=['#d71920', '#bdc3c7', '#ecf0f1'])
+                    st.plotly_chart(fig, use_container_width=True)
+            else: st.info("Geen externe rapporten.")
+        except: pass
+
         # -----------------------------------------------------------------------------
-        # NIEUW: STRATEGISCH DOSSIER (INTELLIGENCE)
+        # NIEUW: STRATEGISCH DOSSIER (INTELLIGENCE) - NU ONDER DE DATA RAPPORTEN
         # -----------------------------------------------------------------------------
         st.markdown("---")
         st.subheader("🧠 Strategisch Dossier (Intelligence)")
@@ -322,24 +340,9 @@ try:
         except Exception as e:
             st.error(f"Fout bij ophalen intelligence: {e}")
 
-        st.markdown("---"); st.subheader("📑 Data Scout Rapporten (Extern)")
-        reports_query = """
-            SELECT m."scheduledDate" as "Datum", sq_h.name as "Thuisploeg", sq_a.name as "Uitploeg", r.position as "Positie", r.label as "Verdict"
-            FROM analysis.scouting_reports r JOIN public.matches m ON r."matchId" = m.id LEFT JOIN public.squads sq_h ON m."homeSquadId" = sq_h.id LEFT JOIN public.squads sq_a ON m."awaySquadId" = sq_a.id
-            WHERE r."iterationId" = %s AND r."playerId" = %s AND m.available = true ORDER BY m."scheduledDate" DESC
-        """
-        try:
-            df_rep = run_query(reports_query, params=(selected_iteration_id, p_player_id))
-            if not df_rep.empty:
-                c1, c2 = st.columns([2, 1])
-                with c1: st.dataframe(df_rep, use_container_width=True, hide_index=True)
-                with c2:
-                    vc = df_rep['Verdict'].value_counts().reset_index(); vc.columns=['Verdict','Aantal']
-                    fig = px.pie(vc, values='Aantal', names='Verdict', hole=0.4, color_discrete_sequence=['#d71920', '#bdc3c7', '#ecf0f1'])
-                    st.plotly_chart(fig, use_container_width=True)
-            else: st.info("Geen externe rapporten.")
-        except: pass
-
+        # -----------------------------------------------------------------------------
+        # SIMILARITY
+        # -----------------------------------------------------------------------------
         st.markdown("---")
         st.subheader("👯 Vergelijkbare Spelers")
         compare_columns = [col for col, score in profile_mapping.items() if score is not None and score > 0]
