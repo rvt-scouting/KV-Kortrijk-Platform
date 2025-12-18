@@ -7,7 +7,7 @@ from utils import run_query, get_config_for_position, POSITION_METRICS, POSITION
 st.set_page_config(page_title="Speler Analyse", page_icon="⚽", layout="wide")
 
 # -----------------------------------------------------------------------------
-# 0. NAVIGATIE LOGICA (Redirect afhandeling)
+# 0. NAVIGATIE LOGICA
 # -----------------------------------------------------------------------------
 if "pending_nav" in st.session_state:
     nav = st.session_state.pending_nav
@@ -21,12 +21,11 @@ if "pending_nav" in st.session_state:
         del st.session_state.pending_nav
 
 # -----------------------------------------------------------------------------
-# 1. SIDEBAR SELECTIE (Data bron)
+# 1. SIDEBAR SELECTIE
 # -----------------------------------------------------------------------------
 st.sidebar.header("1. Selecteer Data")
 
 try:
-    # Haal seizoenen op uit de bron 
     df_seasons = run_query("SELECT DISTINCT season FROM public.iterations ORDER BY season DESC;")
     seasons_list = df_seasons['season'].tolist()
     if "sb_season" not in st.session_state and seasons_list:
@@ -52,18 +51,18 @@ if selected_season and selected_competition:
 else: st.warning("👈 Kies eerst een seizoen en competitie."); st.stop() 
 
 # -----------------------------------------------------------------------------
-# 2. SPELER SELECTIE (RUWE BRON: player_kpis)
+# 2. SPELER SELECTIE (GECORRIGEERDE QUERY)
 # -----------------------------------------------------------------------------
 st.sidebar.divider()
 st.sidebar.header("2. Speler Zoeken")
 
-# Gebruik public.player_kpis om ALLE geregistreerde spelers te tonen 
+# CAST toegevoegd voor playerId en squadId om type-fouten te voorkomen 
 players_query = """
     SELECT DISTINCT p.commonname, p.id as "playerId", sq.name as "squadName"
     FROM public.player_kpis pk
     JOIN public.players p ON CAST(pk."playerId" AS TEXT) = p.id
-    LEFT JOIN public.squads sq ON pk."squadId" = sq.id
-    WHERE pk."iterationId" = %s
+    LEFT JOIN public.squads sq ON CAST(pk."squadId" AS TEXT) = sq.id
+    WHERE CAST(pk."iterationId" AS TEXT) = %s
     ORDER BY p.commonname;
 """
 try:
@@ -89,7 +88,8 @@ try:
         final_player_id = candidate_rows[candidate_rows['squadName'] == selected_squad].iloc[0]['playerId']
     elif len(candidate_rows) == 1: 
         final_player_id = candidate_rows.iloc[0]['playerId']
-except Exception as e: st.error("Fout bij ophalen spelers."); st.stop()
+except Exception as e: 
+    st.error(f"Fout bij ophalen spelers: {e}"); st.stop()
 
 # -----------------------------------------------------------------------------
 # 3. DASHBOARD WEERGAVE
@@ -102,14 +102,15 @@ df_offer = run_query(check_offer_q, params=(str(final_player_id),))
 
 if not df_offer.empty:
     offer = df_offer.iloc[0]
-    st.warning(f"📥 **Aangeboden Speler** | Status: {offer['status']} | Makelaar: {offer['makelaar']} | Prijs: €{offer['vraagprijs'] or '?'}")
+    st.warning(f"📥 **Aangeboden Speler** | Status: {offer['status']} | Makelaar: {offer['makelaar']}")
 
 # B. BASIS INFO & SCORES
 st.divider()
+# Gebruik LEFT JOIN om te voorkomen dat spelers zonder scores verdwijnen 
 score_query = """
     SELECT p.*, a.*, sq_curr.name as "current_team_name"
     FROM public.players p
-    LEFT JOIN analysis.final_impect_scores a ON p.id = a."playerId" AND a."iterationId" = %s
+    LEFT JOIN analysis.final_impect_scores a ON p.id = a."playerId" AND CAST(a."iterationId" AS TEXT) = %s
     LEFT JOIN public.squads sq_curr ON p."currentSquadId" = sq_curr.id
     WHERE p.id = %s
 """
@@ -119,30 +120,18 @@ if not df_scores.empty:
     row = df_scores.iloc[0]
     c1, c2, c3, c4 = st.columns(4)
     with c1: st.metric("Team", row['current_team_name'] or "Onbekend")
-    with c2: st.metric("Geboortedatum", str(row['birthdate']))
-    with c3: st.metric("Geboorteplaats", row['birthplace'] or "-")
-    with c4: st.metric("Voet", row['leg'] or "-")
+    with c2: st.metric("Geboortedatum", str(row.get('birthdate', '-')))
+    with c3: st.metric("Geboorteplaats", row.get('birthplace', '-'))
+    with c4: st.metric("Voet", row.get('leg', '-'))
 
-    # Check of er data is in de analysetabel
-    if pd.isna(row['position']):
+    # Controleer of er berekende scores zijn in de analysetabel 
+    if pd.isna(row.get('position')):
         st.info("ℹ️ Deze speler heeft nog geen berekende Impect-scores (mogelijk te weinig minuten).")
     else:
-        # Hier komen de Spider Charts, Metrics en KPI tabellen zoals in je originele code
-        st.markdown("### 📊 Prestatie Profiel")
-        # [Hier invoegen: Profile mapping, Spider chart & KPI secties uit je vorige bestand]
-        st.write(f"Positie: {row['position']}")
+        st.markdown(f"### 📊 Prestatie Profiel - {row['position']}")
+        # Hier kun je de rest van je visualisatiecode (spider chart, KPIs) invoegen
 
-    # C. SCOUTING RAPPORTEN (INTERN)
-    st.divider()
-    st.subheader("🕵️ Scouting Rapporten (Intern)")
-    # [Hier invoegen: Scouting rapporten query en weergave]
-
-    # D. DATA SCOUT RAPPORTEN (EXTERN)
-    st.divider()
-    st.subheader("📑 Data Scout Rapporten (Extern)")
-    # [Hier invoegen: Externe rapporten query]
-
-    # E. STRATEGISCH DOSSIER (INTELLIGENCE)
+    # C. STRATEGISCH DOSSIER (Intelligence) - Nu voor iedereen beschikbaar 
     st.divider()
     st.subheader("🧠 Strategisch Dossier (Intelligence)")
     intel_q = "SELECT * FROM scouting.speler_intelligence WHERE speler_id = %s ORDER BY laatst_bijgewerkt DESC LIMIT 1"
@@ -150,28 +139,22 @@ if not df_scores.empty:
     
     if not df_intel.empty:
         i_row = df_intel.iloc[0]
-        # Toon links
+        st.caption(f"Laatste wijziging: {i_row['laatst_bijgewerkt']} door {i_row['toegevoegd_door']}")
+        
+        # Social links
         l1, l2, l3, l4 = st.columns(4)
         with l1: 
             if i_row.get('instagram_url'): st.link_button("📸 Instagram", i_row['instagram_url'], use_container_width=True)
-        with l2: 
-            if i_row.get('twitter_url'): st.link_button("🐦 Twitter / X", i_row['twitter_url'], use_container_width=True)
         with l3: 
             if i_row.get('transfermarkt_url'): st.link_button("⚽ Transfermarkt", i_row['transfermarkt_url'], use_container_width=True)
         
-        # Toon Intelligence vakken
+        # Inhoud vakken
         ci1, ci2 = st.columns(2)
         with ci1:
-            st.info(f"**Club Info:**\n{i_row['club_informatie'] or '-'}")
-            st.info(f"**Familie:**\n{i_row['familie_achtergrond'] or '-'}")
+            st.info(f"**Club Info:**\n{i_row.get('club_informatie') or '-'}")
+            st.info(f"**Familie:**\n{i_row.get('familie_achtergrond') or '-'}")
         with ci2:
-            st.warning(f"**Mentaliteit:**\n{i_row['persoonlijkheid'] or '-'}")
-            st.error(f"**Makelaar:**\n{i_row['makelaar_details'] or '-'}")
-        st.caption(f"Laatste wijziging: {i_row['laatst_bijgewerkt']} door {i_row['toegevoegd_door']}")
+            st.warning(f"**Mentaliteit:**\n{i_row.get('persoonlijkheid') or '-'}")
+            st.error(f"**Makelaar:**\n{i_row.get('makelaar_details') or '-'}")
     else:
-        st.info("Nog geen intelligence dossier beschikbaar.")
-
-    # F. SIMILARITY
-    st.divider()
-    st.subheader("👯 Vergelijkbare Spelers")
-    # [Hier invoegen: Similarity logica]
+        st.info("Nog geen intelligence dossier beschikbaar voor deze speler.")
