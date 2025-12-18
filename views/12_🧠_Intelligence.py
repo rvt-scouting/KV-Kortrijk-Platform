@@ -2,134 +2,161 @@ import streamlit as st
 from utils import run_query, init_connection
 import pandas as pd
 
-# -----------------------------------------------------------------------------
-# 1. PAGINA CONFIGURATIE & TITEL
-# -----------------------------------------------------------------------------
 st.title("🧠 Strategisch Speler Dossier")
-st.info("Leg hier kwalitatieve informatie vast over de achtergrond, familie en mentaliteit van spelers.")
+
+# Maak twee tabs: Invoeren & Inzien
+tab1, tab2 = st.tabs(["📝 Dossier Beheer", "📖 Dossiers Inzien"])
 
 # -----------------------------------------------------------------------------
-# 2. SPELER SELECTIE
+# HELP FUNCTIE: SPELERS OPHALEN MET CLUBNAME
 # -----------------------------------------------------------------------------
-# We halen de spelerslijst op uit de analysis.players tabel 
-speler_query = "SELECT id, commonname FROM analysis.players ORDER BY commonname ASC;"
-df_spelers = run_query(speler_query)
+def get_players_with_club():
+    # We joinen analysis.players met analysis.squads voor de clubnaam 
+    query = """
+        SELECT p.id, p.commonname, s.name as club_name 
+        FROM analysis.players p
+        LEFT JOIN analysis.squads s ON p."currentSquadId" = s.id
+        ORDER BY p.commonname ASC;
+    """
+    return run_query(query)
 
-if not df_spelers.empty:
-    # Maak een dictionary voor de selectbox: "Naam": "ID"
-    speler_dict = dict(zip(df_spelers['commonname'], df_spelers['id']))
-    gekozen_naam = st.selectbox("Zoek een speler om het dossier in te zien of bij te werken:", 
-                                options=["Selecteer een speler..."] + list(speler_dict.keys()))
+# -----------------------------------------------------------------------------
+# TAB 1: DOSSIER BEHEER (INVOEREN & AANPASSEN)
+# -----------------------------------------------------------------------------
+with tab1:
+    st.subheader("Nieuw Dossier of Aanpassen")
     
-    if gekozen_naam != "Selecteer een speler...":
-        speler_id = speler_dict[gekozen_naam]
-        
-        # -----------------------------------------------------------------------------
-        # 3. BESTAANDE DATA OPHALEN
-        # -----------------------------------------------------------------------------
-        # We halen de meest recente intelligence op voor deze speler
-        bestaande_data_query = """
-            SELECT * FROM scouting.speler_intelligence 
-            WHERE speler_id = %s 
-            ORDER BY laatst_bijgewerkt DESC LIMIT 1
-        """
-        df_intelligence = run_query(bestaande_data_query, params=(speler_id,))
-        
-        # Controleer of er al een dossier bestaat
-        heeft_data = not df_intelligence.empty
-        
-        # We stellen de beginwaarden in voor het formulier
-        init_club = df_intelligence.iloc[0]['club_informatie'] if heeft_data else ""
-        init_familie = df_intelligence.iloc[0]['familie_achtergrond'] if heeft_data else ""
-        init_mentaliteit = df_intelligence.iloc[0]['persoonlijkheid'] if heeft_data else ""
-        init_makelaar = df_intelligence.iloc[0]['makelaar_details'] if heeft_data else ""
+    # Keuze tussen Database of Manueel
+    invoer_methode = st.radio("Selecteer speler via:", ["Database", "Handmatige Invoer"], horizontal=True)
+    
+    gekozen_id = None
+    gekozen_naam = ""
 
-        # -----------------------------------------------------------------------------
-        # 4. INVOER- & AANPASFORMULIER
-        # -----------------------------------------------------------------------------
-        with st.form("dossier_form", clear_on_submit=False):
-            st.subheader(f"Dossier: {gekozen_naam}")
+    if invoer_methode == "Database":
+        df_db_spelers = get_players_with_club()
+        if not df_db_spelers.empty:
+            # Maak een mooie weergave: "Naam (Club)" 
+            df_db_spelers['display_name'] = df_db_spelers.apply(
+                lambda x: f"{x['commonname']} ({x['club_name'] if x['club_name'] else 'Geen Club'})", axis=1
+            )
             
-            # Toon metadata als het dossier al bestaat
-            if heeft_data:
-                st.caption(f"Laatste update: {df_intelligence.iloc[0]['laatst_bijgewerkt'].strftime('%d-%m-%Y %H:%M')} door {df_intelligence.iloc[0]['toegevoegd_door']}")
-
-            col1, col2 = st.columns(2)
+            speler_opties = ["Selecteer een speler..."] + df_db_spelers['display_name'].tolist()
+            geselecteerde_weergave = st.selectbox("Zoek Speler:", options=speler_opties)
             
-            with col1:
-                club_info = st.text_area("Netwerk & Club Info", 
-                                         value=init_club, 
-                                         height=200, 
-                                         help="Wat zeggen bronnen binnen andere clubs?")
-                familie = st.text_area("Familie & Omgeving", 
-                                       value=init_familie, 
-                                       height=200, 
-                                       help="Informatie over gezinssituatie, opvoeding en stabiliteit.")
+            if geselecteerde_weergave != "Selecteer een speler...":
+                # Haal ID en naam weer op uit de dataframe
+                row = df_db_spelers[df_db_spelers['display_name'] == geselecteerde_weergave].iloc[0]
+                gekozen_id = row['id']
+                gekozen_naam = row['commonname']
+    else:
+        gekozen_naam = st.text_input("Voer de naam van de speler handmatig in:")
+        gekozen_id = "MANUEEL"
+
+    # Als er een speler is geselecteerd/ingevoerd, toon het formulier
+    if gekozen_naam:
+        # Bestaande data ophalen (indien aanwezig)
+        if gekozen_id == "MANUEEL":
+            check_query = "SELECT * FROM scouting.speler_intelligence WHERE speler_id = 'MANUEEL' AND custom_naam = %s LIMIT 1"
+            params = (gekozen_naam,)
+        else:
+            check_query = "SELECT * FROM scouting.speler_intelligence WHERE speler_id = %s LIMIT 1"
+            params = (gekozen_id,)
             
-            with col2:
-                mentaliteit = st.text_area("Persoonlijkheid & Mentaliteit", 
-                                           value=init_mentaliteit, 
-                                           height=200, 
-                                           help="Is het een leider? Hoe gaat hij om met tegenslagen?")
-                makelaar = st.text_area("Makelaar & Contract", 
-                                        value=init_makelaar, 
-                                        height=200, 
-                                        help="Details over de agent en eventuele contractuele bijzonderheden.")
-
-            # Knop voor opslaan
-            submit_label = "Dossier Bijwerken" if heeft_data else "Nieuw Dossier Opslaan"
-            submitted = st.form_submit_button(submit_label)
-
-            if submitted:
-                # Naam van de ingelogde gebruiker ophalen uit de sessie
-                scout_naam = st.session_state.user_info.get('naam', 'Onbekend')
-                
+        df_exist = run_query(check_query, params=params)
+        heeft_data = not df_exist.empty
+        
+        # Formulier vullen
+        with st.form("intel_form"):
+            st.write(f"Dossier voor: **{gekozen_naam}**")
+            c1, c2 = st.columns(2)
+            with c1:
+                club_info = st.text_area("Netwerk & Club Info", value=df_exist.iloc[0]['club_informatie'] if heeft_data else "")
+                familie = st.text_area("Familie & Omgeving", value=df_exist.iloc[0]['familie_achtergrond'] if heeft_data else "")
+            with c2:
+                mentaliteit = st.text_area("Persoonlijkheid & Mentaliteit", value=df_exist.iloc[0]['persoonlijkheid'] if heeft_data else "")
+                makelaar = st.text_area("Makelaar & Contract", value=df_exist.iloc[0]['makelaar_details'] if heeft_data else "")
+            
+            if st.form_submit_button("Opslaan"):
+                scout = st.session_state.user_info.get('naam')
                 conn = init_connection()
                 cur = conn.cursor()
                 try:
                     if heeft_data:
-                        # UPDATE bestaand record
-                        update_sql = """
-                            UPDATE scouting.speler_intelligence 
-                            SET club_informatie = %s, familie_achtergrond = %s, 
-                                persoonlijkheid = %s, makelaar_details = %s, 
-                                toegevoegd_door = %s, laatst_bijgewerkt = NOW()
-                            WHERE speler_id = %s
-                        """
-                        cur.execute(update_sql, (club_info, familie, mentaliteit, makelaar, scout_naam, speler_id))
+                        sql = """UPDATE scouting.speler_intelligence SET club_informatie=%s, familie_achtergrond=%s, 
+                                 persoonlijkheid=%s, makelaar_details=%s, toegevoegd_door=%s, laatst_bijgewerkt=NOW() 
+                                 WHERE id=%s"""
+                        cur.execute(sql, (club_info, familie, mentaliteit, makelaar, scout, int(df_exist.iloc[0]['id'])))
                     else:
-                        # INSERT nieuw record
-                        insert_sql = """
-                            INSERT INTO scouting.speler_intelligence 
-                            (speler_id, club_informatie, familie_achtergrond, persoonlijkheid, makelaar_details, toegevoegd_door)
-                            VALUES (%s, %s, %s, %s, %s, %s)
-                        """
-                        cur.execute(insert_sql, (speler_id, club_info, familie, mentaliteit, makelaar, scout_naam))
-                    
+                        # Zorg dat je de kolom 'custom_naam' in je database hebt! 
+                        sql = """INSERT INTO scouting.speler_intelligence (speler_id, club_informatie, familie_achtergrond, 
+                                 persoonlijkheid, makelaar_details, toegevoegd_door, custom_naam) 
+                                 VALUES (%s, %s, %s, %s, %s, %s, %s)"""
+                        cur.execute(sql, (gekozen_id, club_info, familie, mentaliteit, makelaar, scout, gekozen_naam if gekozen_id == "MANUEEL" else None))
                     conn.commit()
-                    st.success(f"Dossier voor {gekozen_naam} succesvol opgeslagen!")
-                    st.rerun() # Pagina herladen om de nieuwe data/datum te tonen
+                    st.success("Opgeslagen!")
+                    st.rerun()
                 except Exception as e:
-                    st.error(f"Fout bij opslaan in database: {e}")
+                    st.error(f"Fout: {e}")
                 finally:
                     cur.close()
                     conn.close()
 
 # -----------------------------------------------------------------------------
-# 5. HISTORIE OVERZICHT (Piramidestatistieken laag 3)
+# TAB 2: DOSSIERS INZIEN (LEZEN & FILTEREN)
 # -----------------------------------------------------------------------------
-st.divider()
-st.subheader("Recent bijgewerkte dossiers")
-
-recent_query = """
-    SELECT p.commonname AS Speler, i.toegevoegd_door AS Scout, i.laatst_bijgewerkt AS "Laatste Wijziging"
-    FROM scouting.speler_intelligence i
-    JOIN analysis.players p ON i.speler_id = p.id
-    ORDER BY i.laatst_bijgewerkt DESC LIMIT 10
-"""
-df_recent = run_query(recent_query)
-
-if not df_recent.empty:
-    st.dataframe(df_recent, use_container_width=True, hide_index=True)
-else:
-    st.write("Er zijn nog geen dossiers aangemaakt.")
+with tab2:
+    st.subheader("Alle Opgeslagen Dossiers")
+    
+    # Haal alle dossiers op met spelersnamen
+    list_query = """
+        SELECT i.id, 
+               COALESCE(p.commonname, i.custom_naam) as speler_naam,
+               s.name as club,
+               i.toegevoegd_door as scout,
+               i.laatst_bijgewerkt,
+               i.club_informatie, i.familie_achtergrond, i.persoonlijkheid, i.makelaar_details
+        FROM scouting.speler_intelligence i
+        LEFT JOIN analysis.players p ON i.speler_id = p.id
+        LEFT JOIN analysis.squads s ON p."currentSquadId" = s.id
+        ORDER BY i.laatst_bijgewerkt DESC
+    """
+    df_all = run_query(list_query)
+    
+    if not df_all.empty:
+        # Filter optie
+        search = st.text_input("Filter op speler of club:", "").lower()
+        df_filtered = df_all[
+            df_all['speler_naam'].str.lower().contains(search, na=False) | 
+            df_all['club'].str.lower().contains(search, na=False)
+        ]
+        
+        # Tabel weergave
+        st.write("Klik op een rij in de tabel hieronder om het volledige dossier te lezen.")
+        # We gebruiken dataframe selectie
+        event = st.dataframe(
+            df_filtered[['speler_naam', 'club', 'scout', 'laatst_bijgewerkt']],
+            use_container_width=True,
+            hide_index=True,
+            on_select="rerun",
+            selection_mode="single"
+        )
+        
+        # Details tonen bij selectie
+        if event and len(event.selection.rows) > 0:
+            selected_idx = event.selection.rows[0]
+            row = df_filtered.iloc[selected_idx]
+            
+            st.divider()
+            st.header(f"📖 Dossier: {row['speler_naam']}")
+            
+            col_a, col_b = st.columns(2)
+            with col_a:
+                st.markdown(f"**Club Info:**\n{row['club_informatie']}")
+                st.markdown(f"**Familie:**\n{row['familie_achtergrond']}")
+            with col_b:
+                st.markdown(f"**Mentaliteit:**\n{row['persoonlijkheid']}")
+                st.markdown(f"**Makelaar:**\n{row['makelaar_details']}")
+            
+            st.caption(f"Bijgewerkt op {row['laatst_bijgewerkt']} door {row['scout']}")
+    else:
+        st.info("Er zijn nog geen dossiers om weer te geven.")
