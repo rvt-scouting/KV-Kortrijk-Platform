@@ -1,137 +1,170 @@
 import streamlit as st
-from utils import check_login
+from utils import run_query, init_connection
+import pandas as pd
 
-# -----------------------------------------------------------------------------
-# 1. SETUP
-# -----------------------------------------------------------------------------
-st.set_page_config(
-    page_title="KVK Platform", 
-    page_icon="🔴", 
-    layout="wide",
-    initial_sidebar_state="expanded" 
-)
+st.title("🧠 Strategisch Speler Dossier")
 
-# -----------------------------------------------------------------------------
-# 2. LOGIN LOGICA
-# -----------------------------------------------------------------------------
-if "logged_in" not in st.session_state:
-    st.session_state.logged_in = False
-if "user_info" not in st.session_state:
-    st.session_state.user_info = None
-
-def login_screen():
-    st.title("🔴⚪ KVK Login")
-    with st.form("login"):
-        email = st.text_input("Email")
-        pwd = st.text_input("Wachtwoord", type="password")
-        if st.form_submit_button("Inloggen"):
-            # Controleert credentials in scouting.gebruikers
-            user = check_login(email, pwd)
-            if user:
-                st.session_state.logged_in = True
-                st.session_state.user_info = user
-                st.rerun()
-            else:
-                st.error("Fout: Ongeldige inloggegevens of account inactief.")
-
-def logout():
-    st.session_state.logged_in = False
-    st.session_state.user_info = None
+# --- 0. CACHE RESET ---
+# Dit dwingt de app om de nieuwe tabelstructuur te zien
+if st.sidebar.button("Update Database Schema"):
+    st.cache_data.clear()
+    st.success("Cache geleegd! De nieuwe kolommen worden nu gezocht.")
     st.rerun()
 
-# -----------------------------------------------------------------------------
-# 3. PAGINA DEFINITIES
-# -----------------------------------------------------------------------------
-def welcome():
-    st.title(f"Welkom {st.session_state.user_info.get('naam')}")
-    st.info(f"Je bent ingelogd als: {st.session_state.user_info.get('rol')} (Niveau {st.session_state.user_info.get('toegangsniveau')})")
-    st.write("Gebruik het menu links om te navigeren.")
+# Helper voor spelersdata
+def get_players_data():
+    query = """
+        SELECT p.id, p.commonname, s.name as club_name 
+        FROM analysis.players p
+        LEFT JOIN analysis.squads s ON p."currentSquadId" = s.id
+        ORDER BY p.commonname ASC;
+    """
+    return run_query(query)
 
-def test_page_func():
-    st.title("👤 Mijn Profiel")
-    st.write(f"Naam: {st.session_state.user_info.get('naam')}")
-    st.write(f"Rol: {st.session_state.user_info.get('rol')}")
-    st.write(f"Email: {st.session_state.user_info.get('email', '-')}")
-
-# A. Basis Pagina's
-pg_home = st.Page(welcome, title="Home", icon="🏠")
-pg_profile = st.Page(test_page_func, title="Mijn Profiel", icon="👤")
-
-# B. Hoofd Analyse
-pg_kvk = st.Page("views/11_🔴_KV_Kortrijk.py", title="KV Kortrijk", icon="🔴")
-pg_player_analysis = st.Page("views/1_⚽_Spelers.py", title="Spelers Analyse", icon="⚽")
-pg_team_analysis = st.Page("views/10_🛡️_Teams.py", title="Team Analyse", icon="🛡️")
-
-# C. Scouting Modules
-pg_scout = st.Page("views/4_📝_Scouting.py", title="Scout Rapport Maken", icon="📝") 
-pg_shortlists = st.Page("views/9_🎯_Shortlists.py", title="Shortlists Aanvullen", icon="🎯")
-pg_dashboard = st.Page("views/7_📊_Scouting_Overzicht.py", title="Scouting Dashboard", icon="📈")
-pg_offer = st.Page("views/6_📥_Aangeboden.py", title="Transfermarkt (Aangeboden)", icon="📥")
-pg_disc = st.Page("views/5_🔎_Discover.py", title="Data Discover", icon="🔎")
-
-# D. Intelligence (Niveau 3+)
-pg_intelligence = st.Page("views/12_🧠_Intelligence.py", title="Speler Dossier", icon="🧠")
-
-# E. Performance Modules
-pg_match = st.Page("views/3_📊_Wedstrijden.py", title="Wedstrijd Analyse", icon="📊")
-pg_coach = st.Page("views/2_👔_Coaches.py", title="Coach Profielen", icon="👔")
-
-# F. Beheer
-pg_admin = st.Page("views/8_⚙️_Admin.py", title="Admin Beheer", icon="⚙️")
-pg_import = st.Page("views/import_tool.py", title="Legacy Import Tool", icon="🏗️")
+tab1, tab2 = st.tabs(["📝 Dossier Beheer", "📖 Overzicht & Zoeken"])
 
 # -----------------------------------------------------------------------------
-# 4. NAVIGATIE BOUWER
+# TAB 1: DOSSIER BEHEER
 # -----------------------------------------------------------------------------
-if not st.session_state.logged_in:
-    login_screen()
-else:
-    # Veilig ophalen van toegangsniveau
-    try:
-        lvl = int(st.session_state.user_info.get('toegangsniveau', 0))
-    except (ValueError, TypeError):
-        lvl = 0
-
-    pages = {}
+with tab1:
+    st.subheader("Selecteer een speler")
+    methode = st.radio("Bron:", ["Database", "Handmatige Invoer"], horizontal=True)
     
-    # 1. Algemeen (Iedereen)
-    pages["Algemeen"] = [pg_home, pg_profile]
+    selected_id, selected_name = None, ""
+    
+    if methode == "Database":
+        df_db = get_players_data()
+        if not df_db.empty:
+            df_db['display'] = df_db.apply(lambda x: f"{x['commonname']} ({x['club_name'] if x['club_name'] else 'Geen club'})", axis=1)
+            keuze = st.selectbox("Zoek speler:", ["Selecteer..."] + df_db['display'].tolist())
+            if keuze != "Selecteer...":
+                row = df_db[df_db['display'] == keuze].iloc[0]
+                selected_id, selected_name = row['id'], row['commonname']
+    else:
+        selected_name = st.text_input("Naam van de nieuwe speler:")
+        selected_id = "MANUEEL"
 
-    # 2. Rollen Logica
-    if lvl == 1:
-        # Niveau 1: Scouts zien de basis scouting tools
-        pages["Scouting"] = [pg_scout, pg_shortlists, pg_dashboard]
-
-    elif lvl == 2:
-        # Niveau 2: Coaches zien performance data
-        pages["Performance"] = [pg_match]
-
-    elif lvl >= 3:
-        # Niveau 3+: Management & Data Analisten
-        pages["🔍 Hoofd Analyse"] = [pg_kvk, pg_player_analysis, pg_team_analysis]
+    if selected_name:
+        check_sql = "SELECT * FROM scouting.speler_intelligence WHERE speler_id = %s"
+        params = (selected_id,)
+        if selected_id == "MANUEEL":
+            check_sql = "SELECT * FROM scouting.speler_intelligence WHERE speler_id = 'MANUEEL' AND custom_naam = %s"
+            params = (selected_name,)
+            
+        existing = run_query(check_sql, params=params)
+        heeft_data = not existing.empty
         
-        pages["Scouting & Markt"] = [
-            pg_dashboard, 
-            pg_scout, 
-            pg_shortlists, 
-            pg_intelligence, # Nieuw toegevoegd
-            pg_offer, 
-            pg_disc
-        ]
-        
-        pages["Performance Data"] = [pg_match, pg_coach]
-        pages["Beheer"] = [pg_admin, pg_import]
+        # VEILIGE KOLOM-CHECK (Voorkomt KeyError)
+        def get_val(col):
+            if heeft_data and col in existing.columns:
+                val = existing.iloc[0][col]
+                return val if val is not None else ""
+            return ""
 
-    # Sidebar UI
-    with st.sidebar:
-        st.title("KV Kortrijk")
-        
-    # Start Navigatie
-    pg = st.navigation(pages)
-    pg.run()
+        with st.form("dossier_form"):
+            st.markdown(f"### Bewerken: {selected_name}")
+            
+            c1, c2 = st.columns(2)
+            with c1:
+                club_info = st.text_area("Club / Netwerk Info", value=get_val('club_informatie'))
+                familie = st.text_area("Familie & Omgeving", value=get_val('familie_achtergrond'))
+            with c2:
+                mentaliteit = st.text_area("Persoonlijkheid & Mentaliteit", value=get_val('persoonlijkheid'))
+                makelaar = st.text_area("Makelaar & Contract", value=get_val('makelaar_details'))
+            
+            st.markdown("---")
+            st.markdown("🔗 **Social Media & Externe Links**")
+            l1, l2 = st.columns(2)
+            with l1:
+                insta = st.text_input("Instagram URL", value=get_val('instagram_url'), placeholder="https://instagram.com/...")
+                twitter = st.text_input("Twitter / X URL", value=get_val('twitter_url'), placeholder="https://x.com/...")
+            with l2:
+                tm = st.text_input("Transfermarkt URL", value=get_val('transfermarkt_url'), placeholder="https://transfermarkt.com/...")
+                overig = st.text_input("Overige Link", value=get_val('overige_url'))
 
-    # Sidebar Footer
-    with st.sidebar:
-        st.divider()
-        if st.button("Uitloggen"):
-            logout()
+            # De knop MOET in de st.form staan
+            if st.form_submit_button("Dossier Opslaan"):
+                scout = st.session_state.user_info.get('naam', 'Onbekend')
+                conn = init_connection()
+                cur = conn.cursor()
+                try:
+                    if heeft_data:
+                        sql = """UPDATE scouting.speler_intelligence 
+                                 SET club_informatie=%s, familie_achtergrond=%s, persoonlijkheid=%s, 
+                                     makelaar_details=%s, instagram_url=%s, twitter_url=%s, 
+                                     transfermarkt_url=%s, overige_url=%s, toegevoegd_door=%s, laatst_bijgewerkt=NOW() 
+                                 WHERE id=%s"""
+                        cur.execute(sql, (club_info, familie, mentaliteit, makelaar, insta, twitter, tm, overig, scout, int(existing.iloc[0]['id'])))
+                    else:
+                        sql = """INSERT INTO scouting.speler_intelligence 
+                                 (speler_id, club_informatie, familie_achtergrond, persoonlijkheid, 
+                                  makelaar_details, instagram_url, twitter_url, transfermarkt_url, 
+                                  overige_url, toegevoegd_door, custom_naam) 
+                                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"""
+                        cur.execute(sql, (selected_id, club_info, familie, mentaliteit, makelaar, insta, twitter, tm, overig, scout, 
+                                          selected_name if selected_id == "MANUEEL" else None))
+                    conn.commit()
+                    st.success("Opgeslagen!")
+                    st.cache_data.clear()
+                    st.rerun()
+                except Exception as e: st.error(f"Fout: {e}")
+                finally: cur.close(); conn.close()
+
+# -----------------------------------------------------------------------------
+# TAB 2: OVERZICHT & ZOEKEN
+# -----------------------------------------------------------------------------
+with tab2:
+    st.subheader("Dossier Bibliotheek")
+    
+    all_data_sql = """
+        SELECT i.*, COALESCE(p.commonname, i.custom_naam) as speler_naam, s.name as club
+        FROM scouting.speler_intelligence i
+        LEFT JOIN analysis.players p ON i.speler_id = p.id
+        LEFT JOIN analysis.squads s ON p."currentSquadId" = s.id
+        ORDER BY i.laatst_bijgewerkt DESC
+    """
+    df_all = run_query(all_data_sql)
+    
+    if not df_all.empty:
+        search = st.text_input("🔍 Filter op naam:").lower()
+        df_display = df_all[df_all['speler_naam'].str.lower().str.contains(search, na=False)]
+        
+        # Weergeven van basis info in tabel
+        selection = st.dataframe(
+            df_display[['speler_naam', 'club', 'toegevoegd_door', 'laatst_bijgewerkt']],
+            use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row"
+        )
+        
+        if selection and selection.selection.rows:
+            dossier = df_display.iloc[selection.selection.rows[0]]
+            
+            st.divider()
+            st.markdown(f"### 📖 {dossier['speler_naam']}")
+            st.caption(f"🗓️ Laatste wijziging: {dossier['laatst_bijgewerkt']} | Scout: {dossier['toegevoegd_door']}")
+            
+            # Toon links alleen als de kolommen bestaan in de resultaten
+            st.markdown("#### 🔗 Links")
+            sl1, sl2, sl3, sl4 = st.columns(4)
+            with sl1: 
+                if 'instagram_url' in dossier and dossier['instagram_url']: st.link_button("📸 Instagram", dossier['instagram_url'])
+            with sl2: 
+                if 'twitter_url' in dossier and dossier['twitter_url']: st.link_button("🐦 Twitter / X", dossier['twitter_url'])
+            with sl3: 
+                if 'transfermarkt_url' in dossier and dossier['transfermarkt_url']: st.link_button("⚽ Transfermarkt", dossier['transfermarkt_url'])
+            with sl4: 
+                if 'overige_url' in dossier and dossier['overige_url']: st.link_button("🔗 Overig", dossier['overige_url'])
+
+            st.markdown("---")
+            c_a, c_b = st.columns(2)
+            with c_a:
+                st.info("**Club Info**")
+                st.write(dossier['club_informatie'] or "-")
+                st.info("**Familie**")
+                st.write(dossier['familie_achtergrond'] or "-")
+            with c_b:
+                st.warning("**Persoonlijkheid**")
+                st.write(dossier['persoonlijkheid'] or "-")
+                st.error("**Makelaar**")
+                st.write(dossier['makelaar_details'] or "-")
+    else:
+        st.write("Geen dossiers gevonden.")
