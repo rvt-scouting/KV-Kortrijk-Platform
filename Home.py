@@ -25,6 +25,7 @@ def login_screen():
         email = st.text_input("Email")
         pwd = st.text_input("Wachtwoord", type="password")
         if st.form_submit_button("Inloggen"):
+            # Controleert credentials in scouting.gebruikers
             user = check_login(email, pwd)
             if user:
                 st.session_state.logged_in = True
@@ -52,27 +53,30 @@ def test_page_func():
     st.write(f"Rol: {st.session_state.user_info.get('rol')}")
     st.write(f"Email: {st.session_state.user_info.get('email', '-')}")
 
-# Basis Pagina's
+# A. Basis Pagina's
 pg_home = st.Page(welcome, title="Home", icon="🏠")
 pg_profile = st.Page(test_page_func, title="Mijn Profiel", icon="👤")
 
-# HOOFD ANALYSE
+# B. Hoofd Analyse
 pg_kvk = st.Page("views/11_🔴_KV_Kortrijk.py", title="KV Kortrijk", icon="🔴")
 pg_player_analysis = st.Page("views/1_⚽_Spelers.py", title="Spelers Analyse", icon="⚽")
 pg_team_analysis = st.Page("views/10_🛡️_Teams.py", title="Team Analyse", icon="🛡️")
 
-# Scouting Modules
+# C. Scouting Modules
 pg_scout = st.Page("views/4_📝_Scouting.py", title="Scout Rapport Maken", icon="📝") 
 pg_shortlists = st.Page("views/9_🎯_Shortlists.py", title="Shortlists Aanvullen", icon="🎯")
 pg_dashboard = st.Page("views/7_📊_Scouting_Overzicht.py", title="Scouting Dashboard", icon="📈")
 pg_offer = st.Page("views/6_📥_Aangeboden.py", title="Transfermarkt (Aangeboden)", icon="📥")
 pg_disc = st.Page("views/5_🔎_Discover.py", title="Data Discover", icon="🔎")
 
-# Performance Modules
+# D. Intelligence (Niveau 3+)
+pg_intelligence = st.Page("views/12_🧠_Intelligence.py", title="Speler Dossier", icon="🧠")
+
+# E. Performance Modules
 pg_match = st.Page("views/3_📊_Wedstrijden.py", title="Wedstrijd Analyse", icon="📊")
 pg_coach = st.Page("views/2_👔_Coaches.py", title="Coach Profielen", icon="👔")
 
-# Admin & Tools Module
+# F. Beheer
 pg_admin = st.Page("views/8_⚙️_Admin.py", title="Admin Beheer", icon="⚙️")
 pg_import = st.Page("views/import_tool.py", title="Legacy Import Tool", icon="🏗️")
 
@@ -82,52 +86,51 @@ pg_import = st.Page("views/import_tool.py", title="Legacy Import Tool", icon="�
 if not st.session_state.logged_in:
     login_screen()
 else:
-    # Haal niveau op (veilig)
+    # Veilig ophalen van toegangsniveau
     try:
         lvl = int(st.session_state.user_info.get('toegangsniveau', 0))
-    except:
+    except (ValueError, TypeError):
         lvl = 0
 
-    # Bouw de dictionary
     pages = {}
     
-    # 1. ALGEMEEN (Altijd zichtbaar)
+    # 1. Algemeen (Iedereen)
     pages["Algemeen"] = [pg_home, pg_profile]
 
-    # 2. LOGICA PER ROL
-    
-    # --- NIVEAU 1: SCOUTS ---
+    # 2. Rollen Logica
     if lvl == 1:
-        # Scouts zien hun tools + de import tool
-        # TOEGEVOEGD: pg_import aan de lijst
-        pages["Scouting"] = [pg_scout, pg_shortlists, pg_dashboard, ]
+        # Niveau 1: Scouts zien de basis scouting tools
+        pages["Scouting"] = [pg_scout, pg_shortlists, pg_dashboard]
 
-    # --- NIVEAU 2: COACHES ---
     elif lvl == 2:
-        # Coaches zien direct hun wedstrijd analyses
+        # Niveau 2: Coaches zien performance data
         pages["Performance"] = [pg_match]
 
-    # --- NIVEAU 3: MANAGEMENT / ADMIN ---
     elif lvl >= 3:
-        # 1. Hoofd Analyse
+        # Niveau 3+: Management & Data Analisten
         pages["🔍 Hoofd Analyse"] = [pg_kvk, pg_player_analysis, pg_team_analysis]
         
-        # 2. Scouting & Markt
-        pages["Scouting & Markt"] = [pg_dashboard, pg_scout, pg_shortlists, pg_offer, pg_disc]
+        pages["Scouting & Markt"] = [
+            pg_dashboard, 
+            pg_scout, 
+            pg_shortlists, 
+            pg_intelligence, # Nieuw toegevoegd
+            pg_offer, 
+            pg_disc
+        ]
         
-        # 3. Overige Data
         pages["Performance Data"] = [pg_match, pg_coach]
-        
-        # 4. Beheer (Inclusief Import Tool)
         pages["Beheer"] = [pg_admin, pg_import]
 
-    # START DE NAVIGATIE
+    # Sidebar UI
     with st.sidebar:
         st.title("KV Kortrijk")
         
+    # Start Navigatie
     pg = st.navigation(pages)
     pg.run()
 
+    # Sidebar Footer
     with st.sidebar:
         st.divider()
         if st.button("Uitloggen"):
