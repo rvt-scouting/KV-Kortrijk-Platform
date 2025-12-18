@@ -118,7 +118,7 @@ with tab2:
         st.write("Selecteer een rij om het dossier te lezen:")
         selection = st.dataframe(
             df_filtered[['speler_naam', 'club', 'scout', 'laatst_bijgewerkt']],
-            use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single"
+            use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row"
         )
         
         if selection and selection.selection.rows:
