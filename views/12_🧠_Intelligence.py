@@ -1,85 +1,131 @@
 import streamlit as st
-from utils import run_query, init_connection
-import pandas as pd
+from utils import check_login
 
-st.title("🧠 Strategisch Speler Dossier")
+# -----------------------------------------------------------------------------
+# 1. SETUP
+# -----------------------------------------------------------------------------
+st.set_page_config(
+    page_title="KVK Platform", 
+    page_icon="🔴", 
+    layout="wide",
+    initial_sidebar_state="expanded" 
+)
 
-# 1. Selecteer Speler
-speler_query = "SELECT id, commonname FROM analysis.players ORDER BY commonname ASC;"
-df_spelers = run_query(speler_query)
+# -----------------------------------------------------------------------------
+# 2. LOGIN LOGICA
+# -----------------------------------------------------------------------------
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+if "user_info" not in st.session_state:
+    st.session_state.user_info = None
 
-if not df_spelers.empty:
-    speler_dict = dict(zip(df_spelers['commonname'], df_spelers['id']))
-    gekozen_naam = st.selectbox("Zoek Speler:", options=["Selecteer een speler..."] + list(speler_dict.keys()))
-    
-    if gekozen_naam != "Selecteer een speler...":
-        speler_id = speler_dict[gekozen_naam]
+def login_screen():
+    st.title("🔴⚪ KVK Login")
+    with st.form("login"):
+        email = st.text_input("Email")
+        pwd = st.text_input("Wachtwoord", type="password")
+        if st.form_submit_button("Inloggen"):
+            user = check_login(email, pwd)
+            if user:
+                st.session_state.logged_in = True
+                st.session_state.user_info = user
+                st.rerun()
+            else:
+                st.error("Fout: Ongeldige inloggegevens of account inactief.")
+
+def logout():
+    st.session_state.logged_in = False
+    st.session_state.user_info = None
+    st.rerun()
+
+# -----------------------------------------------------------------------------
+# 3. PAGINA DEFINITIES
+# -----------------------------------------------------------------------------
+def welcome():
+    st.title(f"Welkom {st.session_state.user_info.get('naam')}")
+    st.info(f"Je bent ingelogd als: {st.session_state.user_info.get('rol')} (Niveau {st.session_state.user_info.get('toegangsniveau')})")
+    st.write("Gebruik het menu links om te navigeren.")
+
+def test_page_func():
+    st.title("👤 Mijn Profiel")
+    st.write(f"Naam: {st.session_state.user_info.get('naam')}")
+    st.write(f"Rol: {st.session_state.user_info.get('rol')}")
+    st.write(f"Email: {st.session_state.user_info.get('email', '-')}")
+
+# Basis Pagina's
+pg_home = st.Page(welcome, title="Home", icon="🏠")
+pg_profile = st.Page(test_page_func, title="Mijn Profiel", icon="👤")
+
+# HOOFD ANALYSE
+pg_kvk = st.Page("views/11_🔴_KV_Kortrijk.py", title="KV Kortrijk", icon="🔴")
+pg_player_analysis = st.Page("views/1_⚽_Spelers.py", title="Spelers Analyse", icon="⚽")
+pg_team_analysis = st.Page("views/10_🛡️_Teams.py", title="Team Analyse", icon="🛡️")
+
+# Scouting Modules
+pg_scout = st.Page("views/4_📝_Scouting.py", title="Scout Rapport Maken", icon="📝") 
+pg_shortlists = st.Page("views/9_🎯_Shortlists.py", title="Shortlists Aanvullen", icon="🎯")
+pg_dashboard = st.Page("views/7_📊_Scouting_Overzicht.py", title="Scouting Dashboard", icon="📈")
+pg_offer = st.Page("views/6_📥_Aangeboden.py", title="Transfermarkt (Aangeboden)", icon="📥")
+pg_disc = st.Page("views/5_🔎_Discover.py", title="Data Discover", icon="🔎")
+
+# TOEGEVOEGD: Jouw nieuwe bestand met nummer 12
+pg_intelligence = st.Page("views/12_🧠_Intelligence.py", title="Speler Dossier", icon="🧠")
+
+# Performance Modules
+pg_match = st.Page("views/3_📊_Wedstrijden.py", title="Wedstrijd Analyse", icon="📊")
+pg_coach = st.Page("views/2_👔_Coaches.py", title="Coach Profielen", icon="👔")
+
+# Admin & Tools Module
+pg_admin = st.Page("views/8_⚙️_Admin.py", title="Admin Beheer", icon="⚙️")
+pg_import = st.Page("views/import_tool.py", title="Legacy Import Tool", icon="🏗️")
+
+# -----------------------------------------------------------------------------
+# 4. NAVIGATIE BOUWER
+# -----------------------------------------------------------------------------
+if not st.session_state.logged_in:
+    login_screen()
+else:
+    try:
+        lvl = int(st.session_state.user_info.get('toegangsniveau', 0))
+    except:
+        lvl = 0
+
+    pages = {}
+    pages["Algemeen"] = [pg_home, pg_profile]
+
+    # Niveau 1: Scouts
+    if lvl == 1:
+        pages["Scouting"] = [pg_scout, pg_shortlists, pg_dashboard]
+
+    # Niveau 2: Coaches
+    elif lvl == 2:
+        pages["Performance"] = [pg_match]
+
+    # Niveau 3: Management / Admin
+    elif lvl >= 3:
+        pages["🔍 Hoofd Analyse"] = [pg_kvk, pg_player_analysis, pg_team_analysis]
         
-        # 2. Bestaande data ophalen
-        bestaande_data_query = "SELECT * FROM scouting.speler_intelligence WHERE speler_id = %s ORDER BY laatst_bijgewerkt DESC LIMIT 1"
-        df_intelligence = run_query(bestaande_data_query, params=(speler_id,))
+        # Scouting & Markt inclusief het Speler Dossier
+        pages["Scouting & Markt"] = [
+            pg_dashboard, 
+            pg_scout, 
+            pg_shortlists, 
+            pg_intelligence,  # Hier is de nieuwe pagina toegevoegd
+            pg_offer, 
+            pg_disc
+        ]
         
-        # We vullen de velden met bestaande data als die er is
-        heeft_data = not df_intelligence.empty
-        init_club = df_intelligence.iloc[0]['club_informatie'] if heeft_data else ""
-        init_familie = df_intelligence.iloc[0]['familie_achtergrond'] if heeft_data else ""
-        init_mentaliteit = df_intelligence.iloc[0]['persoonlijkheid'] if heeft_data else ""
-        init_makelaar = df_intelligence.iloc[0]['makelaar_details'] if heeft_data else ""
+        pages["Performance Data"] = [pg_match, pg_coach]
+        pages["Beheer"] = [pg_admin, pg_import]
 
-        # 3. Formulier (Invoeren & Aanpassen)
-        with st.form("dossier_form", clear_on_submit=False):
-            st.subheader(f"Dossier van {gekozen_naam}")
-            if heeft_data:
-                st.caption(f"Laatste update: {df_intelligence.iloc[0]['laatst_bijgewerkt']} door {df_intelligence.iloc[0]['toegevoegd_door']}")
+    # START DE NAVIGATIE
+    with st.sidebar:
+        st.title("KV Kortrijk")
+        
+    pg = st.navigation(pages)
+    pg.run()
 
-            col1, col2 = st.columns(2)
-            with col1:
-                club_info = st.text_area("Club Informatie (netwerk)", value=init_club, height=150)
-                familie = st.text_area("Familie & Omgeving", value=init_familie, height=150)
-            with col2:
-                mentaliteit = st.text_area("Persoonlijkheid & Mentaliteit", value=init_mentaliteit, height=150)
-                makelaar = st.text_area("Makelaar & Contract", value=init_makelaar, height=150)
-
-            submitted = st.form_submit_button("Dossier Bijwerken")
-
-            if submitted:
-                conn = init_connection()
-                cur = conn.cursor()
-                try:
-                    # We gebruiken een UPDATE als er al data is, anders een INSERT
-                    if heeft_data:
-                        update_sql = """
-                            UPDATE scouting.speler_intelligence 
-                            SET club_informatie = %s, familie_achtergrond = %s, 
-                                persoonlijkheid = %s, makelaar_details = %s, 
-                                toegevoegd_door = %s, laatst_bijgewerkt = NOW()
-                            WHERE speler_id = %s
-                        """
-                        cur.execute(update_sql, (club_info, familie, mentaliteit, makelaar, st.session_state.user_info['naam'], speler_id))
-                    else:
-                        insert_sql = """
-                            INSERT INTO scouting.speler_intelligence 
-                            (speler_id, club_informatie, familie_achtergrond, persoonlijkheid, makelaar_details, toegevoegd_door)
-                            VALUES (%s, %s, %s, %s, %s, %s)
-                        """
-                        cur.execute(insert_sql, (speler_id, club_info, familie, mentaliteit, makelaar, st.session_state.user_info['naam']))
-                    
-                    conn.commit()
-                    st.success(f"Dossier voor {gekozen_naam} is succesvol bijgewerkt!")
-                    st.rerun() # Pagina verversen om nieuwe info te tonen
-                except Exception as e:
-                    st.error(f"Fout bij opslaan: {e}")
-                finally:
-                    cur.close()
-                    conn.close()
-
-# 4. Historie overzicht (onderaan de pagina)
-st.divider()
-st.subheader("Recent toegevoegde intelligentie")
-recent_query = """
-    SELECT p.commonname as Speler, i.toegevoegd_door as Scout, i.laatst_bijgewerkt as Datum
-    FROM scouting.speler_intelligence i
-    JOIN analysis.players p ON i.speler_id = p.id
-    ORDER BY i.laatst_bijgewerkt DESC LIMIT 5
-"""
-st.dataframe(run_query(recent_query), use_container_width=True)
+    with st.sidebar:
+        st.divider()
+        if st.button("Uitloggen"):
+            logout()
