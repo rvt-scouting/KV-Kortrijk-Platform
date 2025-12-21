@@ -278,15 +278,15 @@ with col_editor:
                 "pos": rec.get('positie_gespeeld'), "rate": int(rec.get('beoordeling', 6)), 
                 "adv": rec.get('advies'), "txt": rec.get('rapport_tekst', ""),
                 "gold": bool(rec.get('gouden_buzzer', False)), "sl": rec.get('shortlist_id'), 
-                "len": int(rec.get('speler_lengte', 0) or 0), "con": rec.get('contract_einde')
+                "len": int(rec.get('speler_lengte', 0) or 0), "con": rec.get('contract_einde'),
+                "prof": rec.get('profiel_code')
             }
         else:
-            st.session_state.scout_drafts[d_key] = {"pos": None, "rate": 6, "adv": None, "txt": "", "gold": False, "sl": None, "len": 0, "con": datetime.date.today()}
+            st.session_state.scout_drafts[d_key] = {"pos": None, "rate": 6, "adv": None, "txt": "", "gold": False, "sl": None, "len": 0, "con": datetime.date.today(), "prof": None}
 
     draft = st.session_state.scout_drafts[d_key]
     c1, c2 = st.columns(2)
     with c1:
-        # Veilig laden van posities
         p_opts = opties_posities['value'].tolist() if not opties_posities.empty else ["Doelman", "Verdediger", "Middenvelder", "Aanvaller"]
         p_lbls = opties_posities['label'].tolist() if not opties_posities.empty else p_opts
         p_idx = p_opts.index(draft.get('pos')) if draft.get('pos') in p_opts else 0
@@ -295,10 +295,16 @@ with col_editor:
         new_rate = st.slider("Beoordeling", 1, 10, int(draft.get('rate', 6)), key=f"rt_{d_key}")
 
     with c2:
+        # --- DYNAMISCH PROFIEL (Gekoppeld aan scouting.opties_profielen) ---
+        pr_opts = opties_profielen['value'].tolist() if not opties_profielen.empty else ["P1"]
+        pr_idx = pr_opts.index(draft.get('prof')) if draft.get('prof') in pr_opts else 0
+        new_prof = st.selectbox("Profiel Code", pr_opts, index=pr_idx, key=f"prof_{d_key}")
+
         a_opts = opties_advies['value'].tolist() if not opties_advies.empty else ["Sign", "Follow", "No"]
         a_lbls = opties_advies['label'].tolist() if not opties_advies.empty else a_opts
         a_idx = a_opts.index(draft.get('adv')) if draft.get('adv') in a_opts else 0
         new_adv = st.selectbox("Advies", a_opts, index=a_idx, format_func=lambda x: a_lbls[a_opts.index(x)], key=f"adv_{d_key}")
+        
         new_con = st.date_input("Contract Einde", value=draft.get('con') if draft.get('con') else datetime.date.today(), key=f"cn_{d_key}")
         s_opts = [None] + (opties_shortlists['value'].tolist() if not opties_shortlists.empty else [])
         s_lbls = ["Geen"] + (opties_shortlists['label'].tolist() if not opties_shortlists.empty else [])
@@ -312,9 +318,14 @@ with col_editor:
         s_d = {
             "scout_id": current_scout_id, "speler_id": a_pid, "wedstrijd_id": selected_match_id, "competitie_id": selected_comp_id,
             "custom_speler_naam": a_pname if not a_pid else None, "custom_wedstrijd_naam": custom_match_name if not selected_match_id else None,
-            "positie_gespeeld": new_pos, "profiel_code": "P1", "advies": new_adv, "beoordeling": new_rate, "rapport_tekst": new_txt,
+            "positie_gespeeld": new_pos, 
+            "profiel_code": new_prof, # Gebruikt nu de geselecteerde waarde uit de database
+            "advies": new_adv, "beoordeling": new_rate, "rapport_tekst": new_txt,
             "gouden_buzzer": new_gold, "shortlist_id": new_sl, "speler_lengte": new_len, "contract_einde": new_con
         }
         if save_report_to_db(s_d):
-            st.session_state.scout_drafts[d_key] = {"pos": new_pos, "rate": new_rate, "adv": new_adv, "txt": new_txt, "gold": new_gold, "sl": new_sl, "len": new_len, "con": new_con}
+            st.session_state.scout_drafts[d_key] = {
+                "pos": new_pos, "rate": new_rate, "adv": new_adv, "txt": new_txt, 
+                "gold": new_gold, "sl": new_sl, "len": new_len, "con": new_con, "prof": new_prof
+            }
             st.success(f"Rapport voor {a_pname} opgeslagen!"); st.balloons()
