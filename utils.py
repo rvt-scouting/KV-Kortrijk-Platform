@@ -134,3 +134,17 @@ def check_login(email, password):
         return df.iloc[0].to_dict()
     else:
         return None
+
+def commit_query(query, params=None):
+    """Voert een INSERT, UPDATE of DELETE query uit."""
+    conn = init_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(query, params)
+            conn.commit()
+            return True
+    except Exception as e:
+        st.error(f"Database Error: {e}")
+        return False
+    finally:
+        conn.close()
