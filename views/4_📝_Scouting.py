@@ -96,47 +96,66 @@ def save_report_to_db(data):
         if conn: conn.close()
 
 # -----------------------------------------------------------------------------
-# 2. INITIALISATIE & MATCH SELECTIE
+# 2. WEDSTRIJD SELECTIE
 # -----------------------------------------------------------------------------
 st.title("📝 Live Match Scouting")
 
-# Inladen opties (Voorkomt NameErrors)
+selected_match_id = None; selected_comp_id = None; custom_match_name = None
+home_team_name = "Thuis"; away_team_name = "Uit"
+sel_season = None; sel_comp = None
+
 opties_posities = get_scouting_options_safe('opties_posities')
+opties_profielen = get_scouting_options_safe('opties_profielen')
 opties_advies = get_scouting_options_safe('opties_advies')
 opties_shortlists = get_scouting_options_safe('shortlists')
 
-selected_match_id = None; selected_comp_id = None; custom_match_name = None
-home_team_name = "Thuis"; away_team_name = "Uit"
-
 st.sidebar.header("Match Setup")
-is_manual_match = st.sidebar.checkbox("🔓 Manuele Wedstrijd")
+is_manual_match = st.sidebar.checkbox("🔓 Manuele Wedstrijd", help="Voor oefenmatchen of niet-DB wedstrijden.")
 
 if is_manual_match:
-    custom_match_name = st.sidebar.text_input("Naam Wedstrijd", placeholder="bv. Oefenmatch KVK")
+    custom_match_name = st.sidebar.text_input("Naam Wedstrijd", placeholder="bv. KVK - Harelbeke")
+    if not custom_match_name: st.info("👈 Voer een naam in."); st.stop()
+    st.subheader(f"Wedstrijd: {custom_match_name}")
 else:
     try:
         df_seasons = run_query("SELECT DISTINCT season FROM public.iterations ORDER BY season DESC")
-        sel_season = st.sidebar.selectbox("1. Seizoen", df_seasons['season'].tolist())
-        df_comps = run_query('SELECT DISTINCT "competitionName" FROM public.iterations WHERE season = %s', params=(sel_season,))
-        sel_comp = st.sidebar.selectbox("2. Competitie", df_comps['competitionName'].tolist())
-        
-        match_query = """
-            SELECT m.id, h.name as home, a.name as away, m."iterationId", m."scheduledDate"
-            FROM public.matches m JOIN public.squads h ON m."homeSquadId" = h.id JOIN public.squads a ON m."awaySquadId" = a.id
-            WHERE m."iterationId" IN (SELECT id FROM public.iterations WHERE season = %s AND "competitionName" = %s)
-            ORDER BY m."scheduledDate" DESC LIMIT 50
-        """
-        df_m = run_query(match_query, params=(sel_season, sel_comp))
-        if not df_m.empty:
-            match_opts = {f"{r['home']} - {r['away']} ({r['scheduledDate'].strftime('%d-%m')})": r for _, r in df_m.iterrows()}
-            sel_label = st.sidebar.selectbox("3. Wedstrijd", list(match_opts.keys()))
-            selected_match_id = str(match_opts[sel_label]['id'])
-            selected_comp_id = str(match_opts[sel_label]['iterationId'])
-            home_team_name, away_team_name = match_opts[sel_label]['home'], match_opts[sel_label]['away']
-    except: pass
+        if not df_seasons.empty:
+            seasons = df_seasons['season'].tolist()
+            sel_season = st.sidebar.selectbox("1. Seizoen", seasons)
+        else: st.error("Geen seizoenen."); st.stop()
+    except Exception as e: st.error(f"DB Fout: {e}"); st.stop()
 
-if not selected_match_id and not custom_match_name:
-    st.info("👈 Selecteer een wedstrijd in de sidebar."); st.stop()
+    if sel_season:
+        df_comps = run_query('SELECT DISTINCT "competitionName" FROM public.iterations WHERE season = %s ORDER BY "competitionName"', params=(sel_season,))
+        if not df_comps.empty:
+            comps = df_comps['competitionName'].tolist()
+            sel_comp = st.sidebar.selectbox("2. Competitie", comps)
+        else: st.warning("Geen competities."); st.stop()
+    else: st.stop()
+
+    if sel_season and sel_comp:
+        match_query = """
+            SELECT m.id, m."scheduledDate", m."iterationId", h.name as home, a.name as away
+            FROM public.matches m
+            JOIN public.squads h ON m."homeSquadId" = h.id
+            JOIN public.squads a ON m."awaySquadId" = a.id
+            WHERE m."iterationId" IN (SELECT id FROM public.iterations WHERE season = %s AND "competitionName" = %s)
+            AND m."scheduledDate" <= NOW()
+            ORDER BY m."scheduledDate" DESC
+        """
+        df_matches = run_query(match_query, params=(sel_season, sel_comp))
+        if df_matches.empty: st.info("Geen gespeelde wedstrijden."); st.stop()
+        match_opts = {f"{r['home']} vs {r['away']} ({r['scheduledDate'].strftime('%d-%m')})": r for _, r in df_matches.iterrows()}
+        sel_match_label = st.sidebar.selectbox("3. Wedstrijd", list(match_opts.keys()))
+        sel_match_row = match_opts[sel_match_label]
+        selected_match_id = str(sel_match_row['id'])
+        selected_comp_id = str(sel_match_row['iterationId'])
+        home_team_name = sel_match_row['home']
+        away_team_name = sel_match_row['away']
+    else: st.stop()
+
+st.sidebar.divider()
+st.sidebar.write(f"👤 **Scout:** {current_scout_name}")
 
 # -----------------------------------------------------------------------------
 # 3. SPELERS OPHALEN (Officieel + Geheugen)
