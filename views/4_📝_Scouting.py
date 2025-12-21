@@ -229,45 +229,32 @@ with col_list:
             m_n = st.text_input("Naam Speler:"); st.session_state.manual_player_name_text = m_n
 
 # -----------------------------------------------------------------------------
-# 5. EDITOR (RECHTER KOLOM)
+# 5. EDITOR (RECHTER KOLOM) - GECORRIGEERD VOOR DYNAMISCHE POSITIES
 # -----------------------------------------------------------------------------
 with col_editor:
-    # A. BEPAAL DE NAAM VAN DE ACTIEVE SPELER
     a_pid = st.session_state.active_player_id
     a_pname = st.session_state.manual_player_name_text if not a_pid else "Laden..."
     
-    # Als we een ID hebben, halen we de officiële naam op uit de DB
     if a_pid:
         res_n = run_query("SELECT commonname FROM public.players WHERE id = %s", params=(a_pid,))
-        if not res_n.empty: 
-            a_pname = res_n.iloc[0]['commonname']
+        if not res_n.empty: a_pname = res_n.iloc[0]['commonname']
     
-    # Stop als er nog geen speler is geselecteerd
     if not a_pname or a_pname == "Laden...":
-        st.info("👈 Selecteer een speler uit de lijst of zoek een speler om het rapport te starten.")
-        st.stop()
+        st.info("👈 Selecteer een speler om het rapport te starten."); st.stop()
 
     st.subheader(f"Rapport: {a_pname}")
     
-    # B. DRAFT LOGICA (Laden uit DB of Session State)
-    # Maak een unieke sleutel voor dit specifieke rapport
+    # DRAFT LOGICA
     match_key = selected_match_id if selected_match_id else custom_match_name
     player_key = a_pid if a_pid else a_pname
     d_key = f"{match_key}_{player_key}_{current_scout_id}"
     
-    # Als dit rapport nog niet in het geheugen (session_state) zit, probeer het uit de database te halen
     if d_key not in st.session_state.scout_drafts:
-        q_ex = """
-            SELECT * FROM scouting.rapporten 
-            WHERE scout_id=%s 
-            AND (speler_id=%s OR custom_speler_naam=%s) 
-            AND (wedstrijd_id=%s OR custom_wedstrijd_naam=%s)
-        """
+        q_ex = "SELECT * FROM scouting.rapporten WHERE scout_id=%s AND (speler_id=%s OR custom_speler_naam=%s) AND (wedstrijd_id=%s OR custom_wedstrijd_naam=%s)"
         db_r = run_query(q_ex, (current_scout_id, a_pid, a_pname, selected_match_id, custom_match_name))
         
         if not db_r.empty:
             rec = db_r.iloc[0]
-            # Map de database kolommen naar onze geheugen-sleutels
             st.session_state.scout_drafts[d_key] = {
                 "pos": rec.get('positie_gespeeld'), 
                 "rate": int(rec.get('beoordeling', 6)), 
@@ -279,77 +266,94 @@ with col_editor:
                 "con": rec.get('contract_einde')
             }
         else:
-            # Helemaal nieuw rapport: start met lege waarden
             st.session_state.scout_drafts[d_key] = {
-                "pos": "Middenvelder", "rate": 6, "adv": "Follow", "txt": "", 
-                "gold": False, "sl": None, "len": 0, "con": datetime.date.today()
+                "pos": None, "rate": 6, "adv": None, "txt": "", "gold": False, "sl": None, "len": 0, "con": datetime.date.today()
             }
 
-    # Haal de huidige data uit de session_state (gebruik .get() voor extra veiligheid)
     draft = st.session_state.scout_drafts[d_key]
     
-    # C. FORMULIER INVULLEN
+    # FORMULIER
     c1, c2 = st.columns(2)
     
     with c1:
-        pos_options = ["Doelman", "Verdediger", "Middenvelder", "Aanvaller"]
-        # Zoek welke index we moeten tonen
+        # --- DYNAMISCHE POSITIES HERSTELD ---
+        # Haal de lijsten uit de variabelen die bovenaan je script staan
+        pos_opts = opties_posities['value'].tolist()
+        pos_lbls = opties_posities['label'].tolist()
+        
         current_pos = draft.get('pos')
-        pos_idx = pos_options.index(current_pos) if current_pos in pos_options else 2 # Default Middenvelder
+        # Zoek de index van de opgeslagen positie in de database-lijst
+        try:
+            pos_idx = pos_opts.index(current_pos) if current_pos in pos_opts else 0
+        except:
+            pos_idx = 0
+            
+        new_pos = st.selectbox(
+            "Positie", 
+            options=pos_opts, 
+            index=pos_idx, 
+            format_func=lambda x: pos_lbls[pos_opts.index(x)], # Toon de mooie naam (label)
+            key=f"pos_{d_key}"
+        )
         
-        new_pos = st.selectbox("Positie", pos_options, index=pos_idx, key=f"pos_{d_key}")
-        
-        # LENGTE (De fix voor de KeyError)
+        # LENGTE & RATING
         val_len = int(draft.get('len', 0) or 0)
         new_len = st.number_input("Lengte (cm)", 0, 230, val_len, key=f"len_{d_key}")
-        
         new_rate = st.slider("Beoordeling", 1, 10, int(draft.get('rate', 6)), key=f"rt_{d_key}")
 
     with c2:
-        adv_options = ["Sign", "Follow", "No"]
+        # --- DYNAMISCH ADVIES HERSTELD ---
+        adv_opts = opties_advies['value'].tolist()
+        adv_lbls = opties_advies['label'].tolist()
         current_adv = draft.get('adv')
-        adv_idx = adv_options.index(current_adv) if current_adv in adv_options else 1
+        try:
+            adv_idx = adv_opts.index(current_adv) if current_adv in adv_opts else 0
+        except:
+            adv_idx = 0
+            
+        new_adv = st.selectbox(
+            "Advies", 
+            options=adv_opts, 
+            index=adv_idx, 
+            format_func=lambda x: adv_lbls[adv_opts.index(x)],
+            key=f"adv_{d_key}"
+        )
         
-        new_adv = st.selectbox("Advies", adv_options, index=adv_idx, key=f"adv_{d_key}")
-        
-        # CONTRACT
+        # CONTRACT & SHORTLIST
         val_con = draft.get('con')
         if not val_con: val_con = datetime.date.today()
         new_con = st.date_input("Contract Einde", value=val_con, key=f"cn_{d_key}")
         
-        # SHORTLIST (Optioneel: haal lijst op uit je opties_shortlists indien beschikbaar)
-        new_sl = st.selectbox("Shortlist", [None, 1], format_func=lambda x: "Geen" if x is None else "Hoofd Shortlist", key=f"sl_{d_key}")
+        sl_opts = [None] + opties_shortlists['value'].tolist()
+        sl_lbls = ["Geen"] + opties_shortlists['label'].tolist()
+        current_sl = draft.get('sl')
+        sl_idx = sl_opts.index(current_sl) if current_sl in sl_opts else 0
+        
+        new_sl = st.selectbox(
+            "Shortlist", 
+            options=sl_opts, 
+            index=sl_idx, 
+            format_func=lambda x: sl_lbls[sl_opts.index(x)],
+            key=f"sl_{d_key}"
+        )
 
     new_txt = st.text_area("Analyse / Rapportage", draft.get('txt', ""), height=250, key=f"tx_{d_key}")
     new_gold = st.checkbox("🏆 Gouden Buzzer", draft.get('gold', False), key=f"gd_{d_key}")
 
-    # D. OPSLAAN LOGICA
+    # OPSLAAN
     st.divider()
     if st.button("💾 Rapport Opslaan", type="primary", use_container_width=True):
         save_data = {
-            "scout_id": current_scout_id, 
-            "speler_id": a_pid, 
-            "wedstrijd_id": selected_match_id, 
-            "competitie_id": selected_comp_id,
-            "custom_speler_naam": a_pname if not a_pid else None, 
-            "custom_wedstrijd_naam": custom_match_name if not selected_match_id else None,
-            "positie_gespeeld": new_pos, 
-            "profiel_code": "P1", # Je kunt dit later dynamisch maken
-            "advies": new_adv, 
-            "beoordeling": new_rate, 
-            "rapport_tekst": new_txt,
-            "gouden_buzzer": new_gold, 
-            "shortlist_id": new_sl, 
-            "speler_lengte": new_len, 
-            "contract_einde": new_con
+            "scout_id": current_scout_id, "speler_id": a_pid, "wedstrijd_id": selected_match_id, "competitie_id": selected_comp_id,
+            "custom_speler_naam": a_pname if not a_pid else None, "custom_wedstrijd_naam": custom_match_name if not selected_match_id else None,
+            "positie_gespeeld": new_pos, "profiel_code": "P1", "advies": new_adv, "beoordeling": new_rate, "rapport_tekst": new_txt,
+            "gouden_buzzer": new_gold, "shortlist_id": new_sl, "speler_lengte": new_len, "contract_einde": new_con
         }
         
         if save_report_to_db(save_data):
-            # Update de session state zodat de UI synchroon blijft (vooral handig voor de vinkjes in de lijst)
             st.session_state.scout_drafts[d_key] = {
                 "pos": new_pos, "rate": new_rate, "adv": new_adv, "txt": new_txt, 
                 "gold": new_gold, "sl": new_sl, "len": new_len, "con": new_con
             }
-            st.success(f"Rapport voor {a_pname} succesvol opgeslagen!")
+            st.success(f"Rapport voor {a_pname} opgeslagen!")
             st.balloons()
-            # Optioneel: st.rerun() om de icoontjes in de spelerslijst direct te updaten naar 📝
