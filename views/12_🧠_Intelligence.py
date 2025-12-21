@@ -1,154 +1,148 @@
 import streamlit as st
-from utils import run_query, init_connection
 import pandas as pd
+from utils import run_query, init_connection
 
-st.title("🧠 Strategisch Speler Dossier")
+# --- INITIALISATIE ---
+# Zorg dat de edit_mode altijd gedefinieerd is in de sessie
+if 'edit_mode' not in st.session_state:
+    st.session_state.edit_mode = False
 
-# --- HELPER FUNCTIES ---
-def get_players_data():
-    # We voegen een unieke key toe of we zorgen dat deze query ververst wordt
-    query = """
-        SELECT p.id, p.commonname, s.name as club_name 
-        FROM analysis.players p
-        LEFT JOIN analysis.squads s ON p."currentSquadId" = s.id
-        ORDER BY p.commonname ASC;
-    """
-    return run_query(query)
+st.subheader("Dossier Bibliotheek")
 
-# --- TABS ---
-tab1, tab2 = st.tabs(["📝 Dossier Beheer", "📖 Overzicht & Zoeken"])
+# 1. DATA OPHALEN
+# We casten de ID's naar text om joins tussen verschillende types te voorkomen
+all_data_sql = """
+    SELECT i.*, 
+           COALESCE(p.commonname, i.custom_naam) as speler_naam, 
+           s.name as club
+    FROM scouting.speler_intelligence i
+    LEFT JOIN analysis.players p ON i.speler_id::text = p.id::text
+    LEFT JOIN analysis.squads s ON p."currentSquadId"::text = s.id::text
+    ORDER BY i.laatst_bijgewerkt DESC
+"""
+df_all = run_query(all_data_sql)
 
-# -----------------------------------------------------------------------------
-# TAB 1: DOSSIER BEHEER
-# -----------------------------------------------------------------------------
-with tab1:
-    st.subheader("Selecteer een speler")
-    methode = st.radio("Bron:", ["Database", "Handmatige Invoer"], horizontal=True)
+if not df_all.empty:
+    # 2. ZOEKEN & FILTEREN
+    search = st.text_input("🔍 Filter op naam:").lower()
+    df_display = df_all[df_all['speler_naam'].str.lower().str.contains(search, na=False)].copy()
     
-    selected_id, selected_name = None, ""
+    # 3. INTERACTIEVE TABEL
+    selection = st.dataframe(
+        df_display[['speler_naam', 'club', 'toegevoegd_door', 'laatst_bijgewerkt']],
+        use_container_width=True, 
+        hide_index=True, 
+        on_select="rerun", 
+        selection_mode="single-row"
+    )
     
-    if methode == "Database":
-        df_db = get_players_data()
-        if not df_db.empty:
-            df_db['display'] = df_db.apply(lambda x: f"{x['commonname']} ({x['club_name'] if x['club_name'] else 'Geen club'})", axis=1)
-            keuze = st.selectbox("Zoek speler:", ["Selecteer..."] + df_db['display'].tolist())
-            if keuze != "Selecteer...":
-                row = df_db[df_db['display'] == keuze].iloc[0]
-                selected_id, selected_name = row['id'], row['commonname']
-    else:
-        selected_name = st.text_input("Naam van de nieuwe speler:")
-        # Gebruik None of een specifieke code die je database aankan
-        selected_id = None 
+    # 4. ACTIE OP SELECTIE
+    if selection and selection.selection.rows:
+        # Haal de specifieke rij op uit de gefilterde dataframe
+        selected_index = selection.selection.rows[0]
+        dossier = df_display.iloc[selected_index]
+        
+        st.divider()
 
-    if selected_name:
-        # LET OP: We gebruiken hier GEEN run_query voor de check, omdat run_query gecached is!
-        # Voor dossier-checks willen we ALTIJD de laatste status.
-        conn_check = init_connection()
-        if selected_id:
-            check_sql = "SELECT * FROM scouting.speler_intelligence WHERE speler_id = %s"
-            params = (str(selected_id),)
-        else:
-            check_sql = "SELECT * FROM scouting.speler_intelligence WHERE custom_naam = %s"
-            params = (selected_name,)
-        
-        existing = pd.read_sql(check_sql, conn_check, params=params)
-        conn_check.close()
-        
-        heeft_data = not existing.empty
-        
-        with st.form("dossier_form", clear_on_submit=False):
-            st.markdown(f"### Bewerken: {selected_name}")
-            
-            # Formulier velden (ingevuld met bestaande data indien aanwezig)
-            c1, c2 = st.columns(2)
-            with c1:
-                club_info = st.text_area("Club / Netwerk Info", value=existing.iloc[0]['club_informatie'] if heeft_data else "")
-                familie = st.text_area("Familie & Omgeving", value=existing.iloc[0]['familie_achtergrond'] if heeft_data else "")
-            with c2:
-                mentaliteit = st.text_area("Persoonlijkheid & Mentaliteit", value=existing.iloc[0]['persoonlijkheid'] if heeft_data else "")
-                makelaar = st.text_area("Makelaar & Contract", value=existing.iloc[0]['makelaar_details'] if heeft_data else "")
-            
-            st.markdown("---")
-            st.markdown("🔗 **Social Media & Externe Links**")
-            l1, l2 = st.columns(2)
-            with l1:
-                insta = st.text_input("Instagram URL", value=existing.iloc[0]['instagram_url'] if heeft_data else "")
-                twitter = st.text_input("Twitter / X URL", value=existing.iloc[0]['twitter_url'] if heeft_data else "")
-            with l2:
-                tm = st.text_input("Transfermarkt URL", value=existing.iloc[0]['transfermarkt_url'] if heeft_data else "")
-                overig = st.text_input("Overige Link", value=existing.iloc[0]['overige_url'] if heeft_data else "")
-
-            if st.form_submit_button("💾 Dossier Opslaan"):
-                scout = st.session_state.user_info.get('naam', 'Onbekend')
-                conn = init_connection()
-                cur = conn.cursor()
-                try:
-                    if heeft_data:
-                        sql = """UPDATE scouting.speler_intelligence 
-                                 SET club_informatie=%s, familie_achtergrond=%s, persoonlijkheid=%s, 
-                                     makelaar_details=%s, instagram_url=%s, twitter_url=%s, 
-                                     transfermarkt_url=%s, overige_url=%s, toegevoegd_door=%s, laatst_bijgewerkt=NOW() 
-                                 WHERE id=%s"""
-                        cur.execute(sql, (club_info, familie, mentaliteit, makelaar, insta, twitter, tm, overig, scout, int(existing.iloc[0]['id'])))
-                    else:
-                        sql = """INSERT INTO scouting.speler_intelligence 
-                                 (speler_id, club_informatie, familie_achtergrond, persoonlijkheid, 
-                                  makelaar_details, instagram_url, twitter_url, transfermarkt_url, 
-                                  overige_url, toegevoegd_door, custom_naam) 
-                                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"""
-                        cur.execute(sql, (str(selected_id) if selected_id else None, club_info, familie, mentaliteit, makelaar, insta, twitter, tm, overig, scout, selected_name))
-                    
-                    conn.commit()
-                    
-                    # --- CRUCIAAL: CACHE LEGEN ---
-                    st.cache_data.clear() 
-                    
-                    st.success(f"Dossier van {selected_name} succesvol opgeslagen!")
-                    st.rerun()
-                except Exception as e: 
-                    st.error(f"Fout bij opslaan: {e}")
-                finally: 
-                    cur.close()
-                    conn.close()
-
-# -----------------------------------------------------------------------------
-# TAB 2: OVERZICHT & ZOEKEN
-# -----------------------------------------------------------------------------
-with tab2:
-    st.subheader("Dossier Bibliotheek")
-    
-    # Handige refresh knop voor de zekerheid
-    if st.button("🔄 Forceer Refresh"):
-        st.cache_data.clear()
-        st.rerun()
-
-    all_data_sql = """
-        SELECT i.*, COALESCE(p.commonname, i.custom_naam) as speler_naam, s.name as club
-        FROM scouting.speler_intelligence i
-        LEFT JOIN analysis.players p ON i.speler_id::text = p.id::text
-        LEFT JOIN analysis.squads s ON p."currentSquadId" = s.id
-        ORDER BY i.laatst_bijgewerkt DESC
-    """
-    df_all = run_query(all_data_sql)
-    
-    if not df_all.empty:
-        search = st.text_input("🔍 Filter op naam:").lower()
-        df_display = df_all[df_all['speler_naam'].str.lower().str.contains(search, na=False)].copy()
-        
-        # Gebruik st.dataframe met selectie
-        selection = st.dataframe(
-            df_display[['speler_naam', 'club', 'toegevoegd_door', 'laatst_bijgewerkt']],
-            use_container_width=True, 
-            hide_index=True, 
-            on_select="rerun", 
-            selection_mode="single-row"
-        )
-        
-        if selection and selection.selection.rows:
-            idx = selection.selection.rows[0]
-            dossier = df_display.iloc[idx]
-            
-            # --- WEERGAVE ---
-            st.divider()
+        # Knoppenbalk voor acties
+        col_title, col_edit = st.columns([3, 1])
+        with col_title:
             st.markdown(f"## 📖 {dossier['speler_naam']}")
-            # ... rest van je mooie weergave code ...
+        with col_edit:
+            if st.button("✏️ Dossier Bewerken", use_container_width=True):
+                st.session_state.edit_mode = True
+
+        # --- MODUS: BEWERKEN ---
+        if st.session_state.edit_mode:
+            st.warning(f"Je bewerkt nu het dossier van **{dossier['speler_naam']}**.")
+            
+            with st.form("edit_dossier_form_tab2"):
+                c1, c2 = st.columns(2)
+                with c1:
+                    edit_club = st.text_area("Club / Netwerk Info", value=dossier['club_informatie'] or "")
+                    edit_familie = st.text_area("Familie & Omgeving", value=dossier['familie_achtergrond'] or "")
+                with c2:
+                    edit_mentaliteit = st.text_area("Persoonlijkheid & Mentaliteit", value=dossier['persoonlijkheid'] or "")
+                    edit_makelaar = st.text_area("Makelaar & Contract", value=dossier['makelaar_details'] or "")
+                
+                st.markdown("🔗 **Links**")
+                l1, l2, l3, l4 = st.columns(4)
+                edit_insta = l1.text_input("Instagram", value=dossier['instagram_url'] or "")
+                edit_twitter = l2.text_input("Twitter / X", value=dossier['twitter_url'] or "")
+                edit_tm = l3.text_input("Transfermarkt", value=dossier['transfermarkt_url'] or "")
+                edit_overig = l4.text_input("Overig", value=dossier['overige_url'] or "")
+
+                col_save, col_cancel = st.columns(2)
+                submit = st.form_submit_button("💾 Wijzigingen Opslaan", use_container_width=True)
+
+                if submit:
+                    conn = init_connection()
+                    cur = conn.cursor()
+                    try:
+                        sql_update = """
+                            UPDATE scouting.speler_intelligence 
+                            SET club_informatie=%s, familie_achtergrond=%s, persoonlijkheid=%s, 
+                                makelaar_details=%s, instagram_url=%s, twitter_url=%s, 
+                                transfermarkt_url=%s, overige_url=%s, 
+                                laatst_bijgewerkt=NOW() 
+                            WHERE id=%s
+                        """
+                        cur.execute(sql_update, (
+                            edit_club, edit_familie, edit_mentaliteit, 
+                            edit_makelaar, edit_insta, edit_twitter, 
+                            edit_tm, edit_overig, int(dossier['id'])
+                        ))
+                        conn.commit()
+                        st.cache_data.clear()  # Cruciaal voor refresh!
+                        st.session_state.edit_mode = False
+                        st.success("Wijzigingen opgeslagen!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Fout bij opslaan: {e}")
+                    finally:
+                        cur.close(); conn.close()
+            
+            if st.button("❌ Annuleren"):
+                st.session_state.edit_mode = False
+                st.rerun()
+
+        # --- MODUS: LEZEN (Reader View) ---
+        else:
+            # Header met styling
+            st.markdown(f"""
+                <div style="background-color: #f8f9fa; padding: 15px; border-left: 8px solid #d71920; border-radius: 5px;">
+                    <p style="color: #666; font-size: 14px; margin: 0;">
+                        🗓️ <strong>Laatste wijziging:</strong> {pd.to_datetime(dossier['laatst_bijgewerkt']).strftime('%d-%m-%Y om %H:%M')} 
+                        &nbsp;&nbsp; | &nbsp;&nbsp; 👤 <strong>Scout:</strong> {dossier['toegevoegd_door']}
+                    </p>
+                </div>
+            """, unsafe_allow_html=True)
+            
+            # Social Media Knoppen
+            st.markdown("<br>", unsafe_allow_html=True)
+            sl1, sl2, sl3, sl4 = st.columns(4)
+            with sl1: 
+                if dossier['instagram_url']: st.link_button("📸 Instagram", dossier['instagram_url'], use_container_width=True)
+            with sl2: 
+                if dossier['twitter_url']: st.link_button("🐦 Twitter / X", dossier['twitter_url'], use_container_width=True)
+            with sl3: 
+                if dossier['transfermarkt_url']: st.link_button("⚽ Transfermarkt", dossier['transfermarkt_url'], use_container_width=True)
+            with sl4: 
+                if dossier['overige_url']: st.link_button("🔗 Overig", dossier['overige_url'], use_container_width=True)
+
+            # Details Sectie
+            st.markdown("---")
+            c_a, c_b = st.columns(2)
+            with c_a:
+                st.info("**Club Info**")
+                st.write(dossier['club_informatie'] or "*Geen data beschikbaar*")
+                st.info("**Familie & Achtergrond**")
+                st.write(dossier['familie_achtergrond'] or "*Geen data beschikbaar*")
+            with c_b:
+                st.warning("**Persoonlijkheid & Mentaliteit**")
+                st.write(dossier['persoonlijkheid'] or "*Geen data beschikbaar*")
+                st.error("**Makelaar & Contract**")
+                st.write(dossier['makelaar_details'] or "*Geen data beschikbaar*")
+
+else:
+    st.info("Er zijn nog geen dossiers aangemaakt. Ga naar 'Dossier Beheer' om de eerste speler toe te voegen.")
