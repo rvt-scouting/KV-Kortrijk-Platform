@@ -14,6 +14,8 @@ if "active_player_id" not in st.session_state: st.session_state.active_player_id
 if "manual_player_mode" not in st.session_state: st.session_state.manual_player_mode = False
 if "manual_player_type" not in st.session_state: st.session_state.manual_player_type = "db_search"
 if "manual_player_name_text" not in st.session_state: st.session_state.manual_player_name_text = ""
+# NIEUW: Om 'gepinde' spelers te onthouden
+if "watched_players" not in st.session_state: st.session_state.watched_players = set()
 
 # Check login
 if 'user_info' not in st.session_state or not st.session_state.user_info:
@@ -60,7 +62,6 @@ def search_player_in_db(search_term):
     except: return pd.DataFrame()
 
 def save_report_to_db(data):
-    """ Slaat rapport op inclusief lengte en contract info. """
     conn = None
     try:
         conn = init_connection()
@@ -74,7 +75,6 @@ def save_report_to_db(data):
         custom_p = data.get('custom_speler_naam')
         custom_m = data.get('custom_wedstrijd_naam')
 
-        # Check existing
         where_clauses = ["scout_id = %s"]
         params = [scout_id]
         if speler_id:
@@ -92,7 +92,6 @@ def save_report_to_db(data):
         cur.execute(check_q, tuple(params))
         existing = cur.fetchone()
         
-        # NIEUWE VELDEN: speler_lengte, contract_einde
         if existing:
             update_q = """
                 UPDATE scouting.rapporten SET
@@ -224,7 +223,11 @@ if selected_match_id:
                     df_players = pd.merge(df_p_raw, df_names, left_on='player_id', right_on='id', how='left')
                     df_players['commonname'] = df_players['commonname'].fillna("Onbekend")
                     df_players['shirt_number'] = pd.to_numeric(df_players['shirt_number'], errors='coerce').fillna(99)
-                    df_players = df_players.sort_values(by=['side', 'shirt_number'])
+                    
+                    # NIEUW: Voeg 'is_watched' kolom toe voor sortering
+                    df_players['is_watched'] = df_players['player_id'].apply(lambda x: x in st.session_state.watched_players)
+                    # Sorteren: Eerst watched (True), dan team side, dan rugnummer
+                    df_players = df_players.sort_values(by=['is_watched', 'side', 'shirt_number'], ascending=[False, True, True])
     except: pass
 
 # -----------------------------------------------------------------------------
@@ -238,15 +241,33 @@ with col_list:
         team_tab = st.radio("Team", [home_team_name, away_team_name], horizontal=True, label_visibility="collapsed")
         side_filter = 'home' if team_tab == home_team_name else 'away'
         filtered_df = df_players[df_players['side'] == side_filter]
+        
+        # We herhalen de sortering hier voor de zekerheid binnen de gefilterde set
+        filtered_df = filtered_df.sort_values(by=['is_watched', 'shirt_number'], ascending=[False, True])
+
         for _, row in filtered_df.iterrows():
             pid = str(row['player_id'])
             dkey = f"{selected_match_id}_{pid}_{current_scout_id}"
             btn_type = "primary" if str(st.session_state.active_player_id) == pid and not st.session_state.manual_player_mode else "secondary"
             icon = "📝" if dkey in st.session_state.scout_drafts else "👤"
-            if st.button(f"{icon} {int(row['shirt_number'])}. {row['commonname']}", key=f"btn_{pid}", type=btn_type, use_container_width=True):
-                st.session_state.active_player_id = pid
-                st.session_state.manual_player_mode = False
-                st.rerun()
+            
+            # --- NIEUWE LOGICA: CHECKBOX + BUTTON ---
+            c_check, c_btn = st.columns([0.15, 0.85])
+            
+            with c_check:
+                # De 'pin' checkbox
+                is_w = st.checkbox("📌", value=row['is_watched'], key=f"watch_{pid}", label_visibility="collapsed")
+                if is_w != row['is_watched']:
+                    if is_w: st.session_state.watched_players.add(pid)
+                    else: st.session_state.watched_players.discard(pid)
+                    st.rerun() # Direct verversen om de speler bovenaan te zetten
+
+            with c_btn:
+                # De normale selectie knop
+                if st.button(f"{icon} {int(row['shirt_number'])}. {row['commonname']}", key=f"btn_{pid}", type=btn_type, use_container_width=True):
+                    st.session_state.active_player_id = pid
+                    st.session_state.manual_player_mode = False
+                    st.rerun()
 
     st.markdown("---")
     knop_label = "➕ Speler toevoegen / Zoeken" if not is_manual_match else "Selecteer Speler"
@@ -271,6 +292,8 @@ with col_list:
         else:
             m_name = st.text_input("Naam Speler", value=st.session_state.manual_player_name_text, key="inp_m_text")
             if m_name: st.session_state.manual_player_name_text = m_name
+
+# 
 
 with col_editor:
     active_pid = None; active_pname = "Onbekend"
@@ -313,7 +336,6 @@ with col_editor:
                 "positie": rec['positie_gespeeld'], "profiel": rec['profiel_code'], "advies": rec['advies'],
                 "rating": int(rec['beoordeling']) if rec['beoordeling'] else 6,
                 "tekst": rec['rapport_tekst'] or "", "gouden_buzzer": bool(rec['gouden_buzzer']), "shortlist": rec['shortlist_id'],
-                # INLADEN NIEUWE VELDEN
                 "lengte": rec['speler_lengte'] if 'speler_lengte' in rec else 0,
                 "contract": rec['contract_einde'] if 'contract_einde' in rec else None
             }
@@ -326,30 +348,21 @@ with col_editor:
     draft = st.session_state.scout_drafts[draft_key]
     unique_suffix = f"{draft_key}"
 
-    # FORMULIER
     c1, c2 = st.columns(2)
     with c1:
         pos_opts = opties_posities['value'].tolist(); pos_lbls = opties_posities['label'].tolist()
         idx_pos = pos_opts.index(draft['positie']) if draft['positie'] in pos_opts else 0
         new_pos = st.selectbox("Positie", pos_opts, index=idx_pos, format_func=lambda x: pos_lbls[pos_opts.index(x)], key=f"pos_{unique_suffix}")
-        
-        # NIEUW VELD: LENGTE
         new_lengte = st.number_input("Lengte (cm)", min_value=0, max_value=230, value=int(draft["lengte"] or 0), key=f"len_{unique_suffix}")
-        
         new_rating = st.slider("Beoordeling", 1, 10, draft["rating"], key=f"rate_{unique_suffix}")
 
     with c2:
         adv_opts = opties_advies['value'].tolist(); adv_lbls = opties_advies['label'].tolist()
         idx_adv = adv_opts.index(draft['advies']) if draft['advies'] in adv_opts else 0
         new_adv = st.selectbox("Advies", adv_opts, index=idx_adv, format_func=lambda x: adv_lbls[adv_opts.index(x)], key=f"adv_{unique_suffix}")
-        
-        # NIEUW VELD: CONTRACT
         val_contract = draft["contract"]
-        # Zorg dat het een date object is voor de date_input
         if isinstance(val_contract, str): val_contract = datetime.datetime.strptime(val_contract, '%Y-%m-%d').date()
-        
         new_contract = st.date_input("Contract Einde", value=val_contract, key=f"con_{unique_suffix}")
-
         prof_opts = opties_profielen['value'].tolist(); prof_lbls = opties_profielen['label'].tolist()
         idx_prof = prof_opts.index(draft['profiel']) if draft['profiel'] in prof_opts else 0
         new_prof = st.selectbox("Profiel", prof_opts, index=idx_prof, format_func=lambda x: prof_lbls[prof_opts.index(x)], key=f"prof_{unique_suffix}")
@@ -364,7 +377,6 @@ with col_editor:
         idx_sl = sl_opts.index(draft['shortlist']) if draft['shortlist'] in sl_opts else 0
         new_sl = st.selectbox("Shortlist", sl_opts, index=idx_sl, format_func=lambda x: sl_lbls[sl_opts.index(x)] if x in sl_opts else "Geen", key=f"sl_{unique_suffix}")
 
-    # UPDATE STATE
     st.session_state.scout_drafts[draft_key] = {
         "positie": new_pos, "profiel": new_prof, "advies": new_adv,
         "rating": new_rating, "tekst": new_tekst, "gouden_buzzer": new_gouden, "shortlist": new_sl,
@@ -380,7 +392,6 @@ with col_editor:
             "positie_gespeeld": new_pos, "profiel_code": new_prof, "advies": new_adv,
             "beoordeling": new_rating, "rapport_tekst": new_tekst, 
             "gouden_buzzer": new_gouden, "shortlist_id": new_sl,
-            # NIEUWE VELDEN DOORGEVEN
             "speler_lengte": new_lengte, "contract_einde": new_contract
         }
         if save_report_to_db(save_data):
