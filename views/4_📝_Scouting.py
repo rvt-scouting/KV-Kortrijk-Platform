@@ -32,6 +32,7 @@ def get_scouting_options_safe(table_name):
         df = run_query(f"SELECT * FROM scouting.{table_name}")
         if df.empty: return pd.DataFrame(columns=['value', 'label'])
         cols = df.columns.tolist()
+        # Zoek naar labels zoals 'naam' of 'omschrijving'
         label_col = next((c for c in cols if c in ['naam', 'label', 'omschrijving']), cols[1] if len(cols)>1 else cols[0])
         value_col = 'id' if 'id' in cols else cols[0]
         return df[[value_col, label_col]].rename(columns={value_col: 'value', label_col: 'label'})
@@ -39,7 +40,6 @@ def get_scouting_options_safe(table_name):
         return pd.DataFrame(columns=['value', 'label'])
 
 def search_player_in_db(search_term):
-    """ Zoekt speler en haalt ook de clubnaam op voor context. """
     if not search_term or len(search_term) < 2: return pd.DataFrame()
     q = """
         SELECT p.id, p.commonname, s.name as team_naam
@@ -52,12 +52,9 @@ def search_player_in_db(search_term):
     return run_query(q, params=(term, term))
 
 def save_report_to_db(data):
-    """ Slaat rapport op inclusief de nieuwe velden. """
     conn = None
     try:
         conn = init_connection(); cur = conn.cursor()
-        
-        # Check of rapport al bestaat voor deze combi
         check_q = """
             SELECT id FROM scouting.rapporten 
             WHERE scout_id = %s 
@@ -96,9 +93,15 @@ def save_report_to_db(data):
         if conn: conn.close()
 
 # -----------------------------------------------------------------------------
-# 2. WEDSTRIJD SELECTIE
+# 2. DATA INITIALISATIE & MATCH SELECTIE
 # -----------------------------------------------------------------------------
 st.title("📝 Live Match Scouting")
+
+# --- HIER WORDEN DE VARIABELEN AANGEMAAKT OM NAMEERRORS TE VOORKOMEN ---
+opties_posities = get_scouting_options_safe('opties_posities')
+opties_advies = get_scouting_options_safe('opties_advies')
+opties_shortlists = get_scouting_options_safe('shortlists')
+
 selected_match_id = None; selected_comp_id = None; custom_match_name = None
 home_team_name = "Thuis"; away_team_name = "Uit"
 
@@ -133,12 +136,11 @@ if not selected_match_id and not custom_match_name:
     st.info("👈 Selecteer een wedstrijd in de sidebar."); st.stop()
 
 # -----------------------------------------------------------------------------
-# 3. SPELERS OPHALEN (OFFICIEEL + GEHEUGEN)
+# 3. SPELERS OPHALEN
 # -----------------------------------------------------------------------------
 df_players = pd.DataFrame()
 players_list = []
 
-# A. Haal officiële spelers uit match details
 if selected_match_id:
     df_json = run_query('SELECT "squadHome", "squadAway" FROM public.match_details_full WHERE "id" = %s', params=(selected_match_id,))
     if not df_json.empty:
@@ -149,33 +151,25 @@ if selected_match_id:
                     players_list.append({'player_id': str(p['id']), 'shirt_number': p.get('shirtNumber', 99), 'side': side.lower(), 'source': 'official'})
             except: pass
 
-# B. Haal handmatig toegevoegde spelers uit eerdere rapporten van deze match
-q_rep = """
-    SELECT r.speler_id, r.custom_speler_naam, p.commonname as db_name
-    FROM scouting.rapporten r LEFT JOIN public.players p ON r.speler_id = p.id
-    WHERE (r.wedstrijd_id = %s OR r.custom_wedstrijd_naam = %s)
-"""
+q_rep = "SELECT r.speler_id, r.custom_speler_naam, p.commonname FROM scouting.rapporten r LEFT JOIN public.players p ON r.speler_id = p.id WHERE (r.wedstrijd_id = %s OR r.custom_wedstrijd_naam = %s)"
 df_rep = run_query(q_rep, params=(selected_match_id, custom_match_name))
 for _, r in df_rep.iterrows():
     pid = str(r['speler_id']) if r['speler_id'] else None
-    pname = r['db_name'] if r['db_name'] else r['custom_speler_naam']
-    # Check of speler al in lijst staat
-    if not any(p['player_id'] == pid for p in players_list if pid) and not any(p['commonname'] == pname for p in players_list if not pid):
+    pname = r['commonname'] if r['commonname'] else r['custom_speler_naam']
+    if not any(p['player_id'] == pid for p in players_list if pid) and not any(p.get('commonname') == pname for p in players_list if not pid):
         players_list.append({'player_id': pid, 'shirt_number': 0, 'side': 'extra', 'source': 'reported', 'commonname': pname})
 
 if players_list:
     df_players = pd.DataFrame(players_list)
-    # Haal ontbrekende namen op voor officiële IDs
     ids_to_fetch = tuple(df_players[df_players['commonname'].isna()]['player_id'].unique())
     if ids_to_fetch:
-        q_names = f"SELECT id, commonname FROM public.players WHERE id IN %s"
-        df_n = run_query(q_names, params=(ids_to_fetch,))
+        q_n = f"SELECT id, commonname FROM public.players WHERE id IN %s"
+        df_n = run_query(q_n, params=(ids_to_fetch,))
         df_n['id'] = df_n['id'].astype(str)
         for _, rn in df_n.iterrows():
             df_players.loc[df_players['player_id'] == rn['id'], 'commonname'] = rn['commonname']
     
     df_players['commonname'] = df_players['commonname'].fillna("Onbekend")
-    # Pinnen & Sorteren
     df_players['is_watched'] = df_players.apply(lambda r: (str(r['player_id']) if r['player_id'] else r['commonname']) in st.session_state.watched_players, axis=1)
     df_players = df_players.sort_values(by=['is_watched', 'side', 'shirt_number'], ascending=[False, True, True])
 
@@ -186,174 +180,107 @@ col_list, col_editor = st.columns([1, 2])
 
 with col_list:
     st.subheader("Selecties")
-    tab_labels = [home_team_name, away_team_name, "Extra/Handmatig"]
-    sel_tab = st.radio("Team", tab_labels, horizontal=True, label_visibility="collapsed")
-    side_filter = 'home' if sel_tab == home_team_name else ('away' if sel_tab == away_team_name else 'extra')
+    sel_tab = st.radio("Team", [home_team_name, away_team_name, "Extra"], horizontal=True, label_visibility="collapsed")
+    side_f = 'home' if sel_tab == home_team_name else ('away' if sel_tab == away_team_name else 'extra')
     
     if not df_players.empty:
-        filtered = df_players[df_players['side'] == side_filter]
+        filtered = df_players[df_players['side'] == side_f]
         for _, row in filtered.iterrows():
-            pid, pname = row['player_id'], row['commonname']
-            p_key = pid if pid else pname
-            dkey = f"{selected_match_id if selected_match_id else custom_match_name}_{p_key}_{current_scout_id}"
-            
-            c_pin, c_btn = st.columns([0.15, 0.85])
-            with c_pin:
+            p_key = row['player_id'] if row['player_id'] else row['commonname']
+            d_key = f"{selected_match_id if selected_match_id else custom_match_name}_{p_key}_{current_scout_id}"
+            c_p, c_b = st.columns([0.15, 0.85])
+            with c_p:
                 is_p = st.checkbox("📌", value=row['is_watched'], key=f"p_{p_key}", label_visibility="collapsed")
                 if is_p != row['is_watched']:
-                    st.session_state.watched_players.add(p_key) if is_p else st.session_state.watched_players.discard(p_key)
+                    st.session_state.watched_players.add(p_key) if is_p else st.session_state.watched_players.discard(p_key); st.rerun()
+            with c_b:
+                style = "primary" if st.session_state.active_player_id == row['player_id'] and row['player_id'] else "secondary"
+                if st.button(f"{row['commonname']}", key=f"b_{p_key}", type=style, use_container_width=True):
+                    st.session_state.active_player_id, st.session_state.manual_player_mode = row['player_id'], (row['player_id'] is None)
+                    if not row['player_id']: st.session_state.manual_player_name_text = row['commonname']
                     st.rerun()
-            with c_btn:
-                style = "primary" if st.session_state.active_player_id == pid and pid else "secondary"
-                icon = "📝" if dkey in st.session_state.scout_drafts else ("📥" if row['source'] == 'reported' else "👤")
-                if st.button(f"{icon} {pname}", key=f"b_{p_key}", type=style, use_container_width=True):
-                    st.session_state.active_player_id, st.session_state.manual_player_mode = pid, (pid is None)
-                    if not pid: st.session_state.manual_player_name_text = pname
-                    st.rerun()
-
+    
     st.divider()
-    if st.button("➕ Speler Zoeken / Toevoegen", use_container_width=True):
+    if st.button("➕ Speler Zoeken", use_container_width=True):
         st.session_state.manual_player_mode = True; st.session_state.active_player_id = None
 
     if st.session_state.manual_player_mode:
-        m_type = st.radio("Methode", ["🔍 Database", "✍️ Manuele Naam"], horizontal=True)
-        if "Database" in m_type:
-            s_txt = st.text_input("Zoek speler (Otavio, ...):")
-            if s_txt:
-                res = search_player_in_db(s_txt)
+        m_t = st.radio("Methode", ["🔍 DB", "✍️ Tekst"], horizontal=True)
+        if "DB" in m_t:
+            s_t = st.text_input("Naam:"); 
+            if s_t:
+                res = search_player_in_db(s_t)
                 for _, r in res.iterrows():
-                    c_info = f" ({r['team_naam']})" if r['team_naam'] else ""
-                    if st.button(f"👤 {r['commonname']}{c_info}", key=f"s_{r['id']}", use_container_width=True):
+                    if st.button(f"👤 {r['commonname']} ({r['team_naam']})", key=f"s_{r['id']}", use_container_width=True):
                         st.session_state.active_player_id = str(r['id']); st.session_state.manual_player_mode = False; st.rerun()
         else:
-            m_n = st.text_input("Naam Speler:"); st.session_state.manual_player_name_text = m_n
+            st.session_state.manual_player_name_text = st.text_input("Naam Speler:")
 
 # -----------------------------------------------------------------------------
-# 5. EDITOR (RECHTER KOLOM) - GECORRIGEERD VOOR DYNAMISCHE POSITIES
+# 5. EDITOR
 # -----------------------------------------------------------------------------
 with col_editor:
     a_pid = st.session_state.active_player_id
     a_pname = st.session_state.manual_player_name_text if not a_pid else "Laden..."
-    
     if a_pid:
         res_n = run_query("SELECT commonname FROM public.players WHERE id = %s", params=(a_pid,))
         if not res_n.empty: a_pname = res_n.iloc[0]['commonname']
     
     if not a_pname or a_pname == "Laden...":
-        st.info("👈 Selecteer een speler om het rapport te starten."); st.stop()
+        st.info("👈 Selecteer een speler."); st.stop()
 
     st.subheader(f"Rapport: {a_pname}")
-    
-    # DRAFT LOGICA
-    match_key = selected_match_id if selected_match_id else custom_match_name
-    player_key = a_pid if a_pid else a_pname
-    d_key = f"{match_key}_{player_key}_{current_scout_id}"
+    d_key = f"{selected_match_id if selected_match_id else custom_match_name}_{a_pid if a_pid else a_pname}_{current_scout_id}"
     
     if d_key not in st.session_state.scout_drafts:
         q_ex = "SELECT * FROM scouting.rapporten WHERE scout_id=%s AND (speler_id=%s OR custom_speler_naam=%s) AND (wedstrijd_id=%s OR custom_wedstrijd_naam=%s)"
         db_r = run_query(q_ex, (current_scout_id, a_pid, a_pname, selected_match_id, custom_match_name))
-        
         if not db_r.empty:
             rec = db_r.iloc[0]
             st.session_state.scout_drafts[d_key] = {
-                "pos": rec.get('positie_gespeeld'), 
-                "rate": int(rec.get('beoordeling', 6)), 
-                "adv": rec.get('advies'), 
-                "txt": rec.get('rapport_tekst', ""),
-                "gold": bool(rec.get('gouden_buzzer', False)), 
-                "sl": rec.get('shortlist_id'), 
-                "len": int(rec.get('speler_lengte', 0) or 0), 
-                "con": rec.get('contract_einde')
+                "pos": rec.get('positie_gespeeld'), "rate": int(rec.get('beoordeling', 6)), 
+                "adv": rec.get('advies'), "txt": rec.get('rapport_tekst', ""),
+                "gold": bool(rec.get('gouden_buzzer', False)), "sl": rec.get('shortlist_id'), 
+                "len": int(rec.get('speler_lengte', 0) or 0), "con": rec.get('contract_einde')
             }
         else:
-            st.session_state.scout_drafts[d_key] = {
-                "pos": None, "rate": 6, "adv": None, "txt": "", "gold": False, "sl": None, "len": 0, "con": datetime.date.today()
-            }
+            st.session_state.scout_drafts[d_key] = {"pos": None, "rate": 6, "adv": None, "txt": "", "gold": False, "sl": None, "len": 0, "con": datetime.date.today()}
 
     draft = st.session_state.scout_drafts[d_key]
-    
-    # FORMULIER
     c1, c2 = st.columns(2)
-    
     with c1:
-        # --- DYNAMISCHE POSITIES HERSTELD ---
-        # Haal de lijsten uit de variabelen die bovenaan je script staan
-        pos_opts = opties_posities['value'].tolist()
-        pos_lbls = opties_posities['label'].tolist()
+        # GEBRUIK OPTIES_POSITIES HIER
+        p_opts = opties_posities['value'].tolist()
+        p_lbls = opties_posities['label'].tolist()
+        p_idx = p_opts.index(draft.get('pos')) if draft.get('pos') in p_opts else 0
+        new_pos = st.selectbox("Positie", p_opts, index=p_idx, format_func=lambda x: p_lbls[p_opts.index(x)], key=f"pos_{d_key}")
         
-        current_pos = draft.get('pos')
-        # Zoek de index van de opgeslagen positie in de database-lijst
-        try:
-            pos_idx = pos_opts.index(current_pos) if current_pos in pos_opts else 0
-        except:
-            pos_idx = 0
-            
-        new_pos = st.selectbox(
-            "Positie", 
-            options=pos_opts, 
-            index=pos_idx, 
-            format_func=lambda x: pos_lbls[pos_opts.index(x)], # Toon de mooie naam (label)
-            key=f"pos_{d_key}"
-        )
-        
-        # LENGTE & RATING
-        val_len = int(draft.get('len', 0) or 0)
-        new_len = st.number_input("Lengte (cm)", 0, 230, val_len, key=f"len_{d_key}")
+        new_len = st.number_input("Lengte (cm)", 0, 230, int(draft.get('len', 0)), key=f"len_{d_key}")
         new_rate = st.slider("Beoordeling", 1, 10, int(draft.get('rate', 6)), key=f"rt_{d_key}")
 
     with c2:
-        # --- DYNAMISCH ADVIES HERSTELD ---
-        adv_opts = opties_advies['value'].tolist()
-        adv_lbls = opties_advies['label'].tolist()
-        current_adv = draft.get('adv')
-        try:
-            adv_idx = adv_opts.index(current_adv) if current_adv in adv_opts else 0
-        except:
-            adv_idx = 0
-            
-        new_adv = st.selectbox(
-            "Advies", 
-            options=adv_opts, 
-            index=adv_idx, 
-            format_func=lambda x: adv_lbls[adv_opts.index(x)],
-            key=f"adv_{d_key}"
-        )
+        a_opts = opties_advies['value'].tolist()
+        a_lbls = opties_advies['label'].tolist()
+        a_idx = a_opts.index(draft.get('adv')) if draft.get('adv') in a_opts else 0
+        new_adv = st.selectbox("Advies", a_opts, index=a_idx, format_func=lambda x: a_lbls[a_opts.index(x)], key=f"adv_{d_key}")
         
-        # CONTRACT & SHORTLIST
-        val_con = draft.get('con')
-        if not val_con: val_con = datetime.date.today()
-        new_con = st.date_input("Contract Einde", value=val_con, key=f"cn_{d_key}")
+        new_con = st.date_input("Contract Einde", value=draft.get('con') if draft.get('con') else datetime.date.today(), key=f"cn_{d_key}")
         
-        sl_opts = [None] + opties_shortlists['value'].tolist()
-        sl_lbls = ["Geen"] + opties_shortlists['label'].tolist()
-        current_sl = draft.get('sl')
-        sl_idx = sl_opts.index(current_sl) if current_sl in sl_opts else 0
-        
-        new_sl = st.selectbox(
-            "Shortlist", 
-            options=sl_opts, 
-            index=sl_idx, 
-            format_func=lambda x: sl_lbls[sl_opts.index(x)],
-            key=f"sl_{d_key}"
-        )
+        s_opts = [None] + opties_shortlists['value'].tolist()
+        s_lbls = ["Geen"] + opties_shortlists['label'].tolist()
+        s_idx = s_opts.index(draft.get('sl')) if draft.get('sl') in s_opts else 0
+        new_sl = st.selectbox("Shortlist", s_opts, index=s_idx, format_func=lambda x: s_lbls[s_opts.index(x)], key=f"sl_{d_key}")
 
-    new_txt = st.text_area("Analyse / Rapportage", draft.get('txt', ""), height=250, key=f"tx_{d_key}")
+    new_txt = st.text_area("Analyse", draft.get('txt', ""), height=250, key=f"tx_{d_key}")
     new_gold = st.checkbox("🏆 Gouden Buzzer", draft.get('gold', False), key=f"gd_{d_key}")
 
-    # OPSLAAN
-    st.divider()
     if st.button("💾 Rapport Opslaan", type="primary", use_container_width=True):
-        save_data = {
+        s_d = {
             "scout_id": current_scout_id, "speler_id": a_pid, "wedstrijd_id": selected_match_id, "competitie_id": selected_comp_id,
             "custom_speler_naam": a_pname if not a_pid else None, "custom_wedstrijd_naam": custom_match_name if not selected_match_id else None,
             "positie_gespeeld": new_pos, "profiel_code": "P1", "advies": new_adv, "beoordeling": new_rate, "rapport_tekst": new_txt,
             "gouden_buzzer": new_gold, "shortlist_id": new_sl, "speler_lengte": new_len, "contract_einde": new_con
         }
-        
-        if save_report_to_db(save_data):
-            st.session_state.scout_drafts[d_key] = {
-                "pos": new_pos, "rate": new_rate, "adv": new_adv, "txt": new_txt, 
-                "gold": new_gold, "sl": new_sl, "len": new_len, "con": new_con
-            }
-            st.success(f"Rapport voor {a_pname} opgeslagen!")
-            st.balloons()
+        if save_report_to_db(s_d):
+            st.session_state.scout_drafts[d_key] = {"pos": new_pos, "rate": new_rate, "adv": new_adv, "txt": new_txt, "gold": new_gold, "sl": new_sl, "len": new_len, "con": new_con}
+            st.success("Opgeslagen!"); st.balloons()
