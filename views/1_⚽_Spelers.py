@@ -61,8 +61,8 @@ st.sidebar.header("2. Speler Zoeken")
 players_query = """
     SELECT p.commonname, p.id as "playerId", sq.name as "squadName"
     FROM public.players p
-    JOIN analysis.final_impect_scores s ON p.id = s."playerId"
-    LEFT JOIN public.squads sq ON s."squadId" = sq.id
+    JOIN analysis.final_impect_scores s ON CAST(p.id AS TEXT) = s."playerId"
+    LEFT JOIN public.squads sq ON CAST(s. "squadId" AS TEXT) = CAST(sq.id AS TEXT)
     WHERE s."iterationId" = %s
     ORDER BY p.commonname;
 """
