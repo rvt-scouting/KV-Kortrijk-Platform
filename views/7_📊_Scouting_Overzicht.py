@@ -59,7 +59,7 @@ show_only_gold = st.sidebar.checkbox("🏆 Toon enkel Gouden Buzzers")
 # -----------------------------------------------------------------------------
 # 2. TABS OPBOUWEN
 # -----------------------------------------------------------------------------
-tab_titles = ["📝 Alle Match Rapporten", "⭐ Shortlists"]
+tab_titles = ["📝 Alle Match Rapporten", "⭐ Referentiematchen"]
 if lvl > 1:
     tab_titles.extend(["📥 Aangeboden Spelers (Markt)", "📈 Scout Statistieken"])
 
