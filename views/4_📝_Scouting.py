@@ -95,14 +95,14 @@ def save_report_to_db(data):
     finally:
         if conn: conn.close()
 
+        
 def sync_text_to_draft():
-    """Zorgt dat de getypte tekst direct in de draft-sessie wordt opgeslagen."""
-    # We halen de huidige sleutel (match_player_scout) op
+    """Slaat de getypte tekst direct op in de sessie-draft."""
     d_key = st.session_state.get('active_d_key')
     if d_key:
-        # We pakken de tekst uit het tekstvak en zetten die in de draft
         st.session_state.scout_drafts[d_key]["txt"] = st.session_state[f"tx_{d_key}"]
-
+        # We slaan ook het tijdstip van de laatste wijziging op
+        st.session_state[f"last_sync_{d_key}"] = datetime.datetime.now().strftime("%H:%M:%S")
 # -----------------------------------------------------------------------------
 # 2. WEDSTRIJD SELECTIE
 # -----------------------------------------------------------------------------
@@ -265,6 +265,7 @@ if players_list:
 # -----------------------------------------------------------------------------
 col_list, col_editor = st.columns([1, 2])
 
+# --- AANPASSING IN SECTIE 4 (Linkerkolom) ---
 with col_list:
     st.subheader("Selecties")
     sel_tab = st.radio("Team", [home_team_name, away_team_name, "Extra"], horizontal=True, label_visibility="collapsed")
@@ -275,20 +276,21 @@ with col_list:
         for _, row in filtered.iterrows():
             p_id = row['player_id']
             p_name = row['commonname']
+            p_nr = int(row['shirt_number']) if row['shirt_number'] else "?" # Het rugnummer
             p_key = p_id if p_id else p_name
             d_key = f"{selected_match_id if selected_match_id else custom_match_name}_{p_key}_{current_scout_id}"
             
             c_pin, c_btn = st.columns([0.15, 0.85])
             with c_pin:
-                is_p = st.checkbox("📌", value=row['is_watched'], key=f"p_{p_key}", label_visibility="collapsed")
-                if is_p != row['is_watched']:
-                    st.session_state.watched_players.add(p_key) if is_p else st.session_state.watched_players.discard(p_key)
-                    st.rerun()
+                st.checkbox("📌", value=row['is_watched'], key=f"p_{p_key}", label_visibility="collapsed")
             with c_btn:
                 style = "primary" if st.session_state.active_player_id == p_id and p_id else "secondary"
-                icon = "📝" if d_key in st.session_state.scout_drafts else ("📥" if row['source'] == 'reported' else "👤")
-                if st.button(f"{icon} {p_name}", key=f"b_{p_key}", type=style, use_container_width=True):
-                    st.session_state.active_player_id, st.session_state.manual_player_mode = p_id, (p_id is None)
+                icon = "📝" if d_key in st.session_state.scout_drafts else "👤"
+                
+                # HIER VOEGEN WE HET RUGNUMMER TOE AAN DE LABEL (#nr)
+                if st.button(f"{icon} #{p_nr} {p_name}", key=f"b_{p_key}", type=style, use_container_width=True):
+                    st.session_state.active_player_id = p_id
+                    st.session_state.manual_player_mode = (p_id is None)
                     if not p_id: st.session_state.manual_player_name_text = p_name
                     st.rerun()
     
@@ -315,31 +317,34 @@ with col_list:
 with col_editor:
     a_pid = st.session_state.active_player_id
     a_pname = st.session_state.manual_player_name_text if not a_pid else "Laden..."
+    
+    # Haal de naam op als we een ID hebben
     if a_pid:
         res_n = run_query("SELECT commonname FROM public.players WHERE id = %s", params=(a_pid,))
         if not res_n.empty: a_pname = res_n.iloc[0]['commonname']
     
     if not a_pname or a_pname == "Laden...":
-        st.info("👈 Selecteer een speler om een rapport te maken."); st.stop()
+        st.info("👈 Selecteer een speler aan de linkerkant om het rapport te openen."); st.stop()
 
-    st.subheader(f"Rapport: {a_pname}")
+    # Unieke sleutel voor dit specifieke rapport (Match + Speler + Scout)
     match_key = selected_match_id if selected_match_id else custom_match_name
     p_key = a_pid if a_pid else a_pname
     d_key = f"{match_key}_{p_key}_{current_scout_id}"
-    st.session_state.active_d_key = d_key # Nodig voor de sync_text functie
+    st.session_state.active_d_key = d_key 
 
-    # CHECK: Hebben we dit rapport al in ons tijdelijk geheugen OF in de database?
+    # --- INITIALISATIE / HERSTEL UIT DATABASE ---
     if d_key not in st.session_state.scout_drafts:
-        # Zoek in de database of er al een bestaand rapport is 
+        # Check of er al data in de DB staat voor deze speler/match 
         q_ex = """
             SELECT * FROM scouting.rapporten 
-            WHERE scout_id=%s AND (speler_id=%s OR custom_speler_naam=%s) 
-            AND (wedstrijd_id=%s OR custom_wedstrijd_naam=%s)
+            WHERE scout_id = %s 
+            AND (speler_id = %s OR custom_speler_naam = %s) 
+            AND (wedstrijd_id = %s OR custom_wedstrijd_naam = %s)
+            ORDER BY aangemaakt_op DESC LIMIT 1
         """
         db_r = run_query(q_ex, (current_scout_id, a_pid, a_pname, selected_match_id, custom_match_name))
         
         if db_r is not None and not db_r.empty:
-            # ER IS DATA: Laad deze in de sessie 
             rec = db_r.iloc[0]
             st.session_state.scout_drafts[d_key] = {
                 "pos": rec.get('positie_gespeeld'), 
@@ -348,60 +353,100 @@ with col_editor:
                 "txt": rec.get('rapport_tekst', ""),
                 "gold": bool(rec.get('gouden_buzzer', False)), 
                 "sl": rec.get('shortlist_id'), 
-                "len": int(rec.get('speler_lengte', 0) or 0), 
-                "con": rec.get('contract_einde'),
-                "prof": rec.get('profiel_code')
+                "prof": rec.get('profiel_code'),
+                "len": 0, # Vul aan als deze kolommen bestaan
+                "con": datetime.date.today()
             }
+            st.session_state[f"status_{d_key}"] = "Bestaand rapport geladen uit database."
         else:
-            # GEEN DATA: Maak een nieuw leeg rapport 
+            # Volledig nieuw rapport
             st.session_state.scout_drafts[d_key] = {
                 "pos": None, "rate": 6, "adv": None, "txt": "", 
                 "gold": False, "sl": None, "len": 0, 
                 "con": datetime.date.today(), "prof": None
             }
 
+    # Haal de huidige werk-versie op
     draft = st.session_state.scout_drafts[d_key]
+
+    # --- HEADER MET STATUS ---
+    h_col1, h_col2 = st.columns([0.7, 0.3])
+    with h_col1:
+        st.subheader(f"📝 Rapport: {a_pname}")
+    with h_col2:
+        sync_time = st.session_state.get(f"last_sync_{d_key}", "")
+        if sync_time:
+            st.caption(f"✅ Opgeslagen in geheugen: {sync_time}")
+        else:
+            st.caption(st.session_state.get(f"status_{d_key}", "Nieuw rapport"))
+
+    # --- INPUT VELDEN ---
     c1, c2 = st.columns(2)
     with c1:
-        p_opts = opties_posities['value'].tolist() if not opties_posities.empty else ["Doelman", "Verdediger", "Middenvelder", "Aanvaller"]
-        p_lbls = opties_posities['label'].tolist() if not opties_posities.empty else p_opts
+        # Positie selectie 
+        p_opts = opties_posities['value'].tolist() if not opties_posities.empty else ["Onbekend"]
+        p_lbls = opties_posities['label'].tolist() if not opties_posities.empty else ["Onbekend"]
         p_idx = p_opts.index(draft.get('pos')) if draft.get('pos') in p_opts else 0
         new_pos = st.selectbox("Positie", p_opts, index=p_idx, format_func=lambda x: p_lbls[p_opts.index(x)], key=f"pos_{d_key}")
+        
         new_len = st.number_input("Lengte (cm)", 0, 230, int(draft.get('len', 0)), key=f"len_{d_key}")
-        new_rate = st.slider("Beoordeling", 1, 10, int(draft.get('rate', 6)), key=f"rt_{d_key}")
+        new_rate = st.slider("Beoordeling (1-10)", 1, 10, int(draft.get('rate', 6)), key=f"rt_{d_key}")
 
     with c2:
-        # --- DYNAMISCH PROFIEL (Gekoppeld aan scouting.opties_profielen) ---
+        # Profiel selectie 
         pr_opts = opties_profielen['value'].tolist() if not opties_profielen.empty else ["P1"]
         pr_idx = pr_opts.index(draft.get('prof')) if draft.get('prof') in pr_opts else 0
         new_prof = st.selectbox("Profiel Code", pr_opts, index=pr_idx, key=f"prof_{d_key}")
 
-        a_opts = opties_advies['value'].tolist() if not opties_advies.empty else ["Sign", "Follow", "No"]
-        a_lbls = opties_advies['label'].tolist() if not opties_advies.empty else a_opts
+        # Advies selectie 
+        a_opts = opties_advies['value'].tolist() if not opties_advies.empty else ["Nog te bepalen"]
+        a_lbls = opties_advies['label'].tolist() if not opties_advies.empty else ["Nog te bepalen"]
         a_idx = a_opts.index(draft.get('adv')) if draft.get('adv') in a_opts else 0
         new_adv = st.selectbox("Advies", a_opts, index=a_idx, format_func=lambda x: a_lbls[a_opts.index(x)], key=f"adv_{d_key}")
         
         new_con = st.date_input("Contract Einde", value=draft.get('con') if draft.get('con') else datetime.date.today(), key=f"cn_{d_key}")
-        s_opts = [None] + (opties_shortlists['value'].tolist() if not opties_shortlists.empty else [])
-        s_lbls = ["Geen"] + (opties_shortlists['label'].tolist() if not opties_shortlists.empty else [])
-        s_idx = s_opts.index(draft.get('sl')) if draft.get('sl') in s_opts else 0
-        new_sl = st.selectbox("Shortlist", s_opts, index=s_idx, format_func=lambda x: s_lbls[s_opts.index(x)], key=f"sl_{d_key}")
 
-    new_txt = st.text_area("Analyse", value=draft.get('txt', ""), height=250, key=f"tx_{d_key}", on_change=sync_text_to_draft)
-    new_gold = st.checkbox("🏆 Gouden Buzzer", draft.get('gold', False), key=f"gd_{d_key}")
+    # Shortlist selectie 
+    s_opts = [None] + (opties_shortlists['value'].tolist() if not opties_shortlists.empty else [])
+    s_lbls = ["Geen Shortlist"] + (opties_shortlists['label'].tolist() if not opties_shortlists.empty else [])
+    s_idx = s_opts.index(draft.get('sl')) if draft.get('sl') in s_opts else 0
+    new_sl = st.selectbox("Voeg toe aan Shortlist", s_opts, index=s_idx, format_func=lambda x: s_lbls[s_opts.index(x)], key=f"sl_{d_key}")
 
-    if st.button("💾 Rapport Opslaan", type="primary", use_container_width=True):
+    # --- TEXT AREA MET AUTOSAVE ---
+    new_txt = st.text_area(
+        "Uitgebreide Analyse", 
+        value=draft.get('txt', ""), 
+        height=300, 
+        key=f"tx_{d_key}",
+        on_change=sync_text_to_draft, # Slaat tekst op zodra je buiten het vak klikt
+        help="Druk op Ctrl+Enter of klik buiten het vak om de tekst tijdelijk te bewaren."
+    )
+    
+    new_gold = st.checkbox("🏆 Gouden Buzzer (Top Talent)", draft.get('gold', False), key=f"gd_{d_key}")
+
+    # --- DEFINITIEVE OPSLAG ---
+    if st.button("💾 DEFINITIEF OPSLAAN IN DATABASE", type="primary", use_container_width=True):
         s_d = {
-            "scout_id": current_scout_id, "speler_id": a_pid, "wedstrijd_id": selected_match_id, "competitie_id": selected_comp_id,
-            "custom_speler_naam": a_pname if not a_pid else None, "custom_wedstrijd_naam": custom_match_name if not selected_match_id else None,
+            "scout_id": current_scout_id, 
+            "speler_id": a_pid, 
+            "wedstrijd_id": selected_match_id, 
+            "competitie_id": selected_comp_id,
+            "custom_speler_naam": a_pname if not a_pid else None, 
+            "custom_wedstrijd_naam": custom_match_name if not selected_match_id else None,
             "positie_gespeeld": new_pos, 
-            "profiel_code": new_prof, # Gebruikt nu de geselecteerde waarde uit de database
-            "advies": new_adv, "beoordeling": new_rate, "rapport_tekst": new_txt,
-            "gouden_buzzer": new_gold, "shortlist_id": new_sl, "speler_lengte": new_len, "contract_einde": new_con
+            "profiel_code": new_prof, 
+            "advies": new_adv, 
+            "beoordeling": new_rate, 
+            "rapport_tekst": new_txt,
+            "gouden_buzzer": new_gold, 
+            "shortlist_id": new_sl, 
+            "speler_lengte": new_len, 
+            "contract_einde": new_con
         }
         if save_report_to_db(s_d):
+            # Update de sessie-versie na succesvolle database opslag
             st.session_state.scout_drafts[d_key] = {
                 "pos": new_pos, "rate": new_rate, "adv": new_adv, "txt": new_txt, 
                 "gold": new_gold, "sl": new_sl, "len": new_len, "con": new_con, "prof": new_prof
             }
-            st.success(f"Rapport voor {a_pname} opgeslagen!"); st.balloons()
+            st.success(f"Rapport voor {a_pname} is definitief opgeslagen in de database!"); st.balloons()
