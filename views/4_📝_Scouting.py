@@ -397,7 +397,7 @@ with col_editor:
     s_opts = [None] + (opties_shortlists['value'].tolist() if not opties_shortlists.empty else [])
     s_lbls = ["Geen Shortlist"] + (opties_shortlists['label'].tolist() if not opties_shortlists.empty else [])
     s_idx = s_opts.index(draft.get('sl')) if draft.get('sl') in s_opts else 0
-    new_sl = st.selectbox("Voeg toe aan Shortlist", s_opts, index=s_idx, format_func=lambda x: s_lbls[s_opts.index(x)], key=f"sl_{d_key}")
+    new_sl = st.selectbox("Referentiematch toevoegen aan shortlist?", s_opts, index=s_idx, format_func=lambda x: s_lbls[s_opts.index(x)], key=f"sl_{d_key}")
 
     # --- TEXT AREA MET AUTOSAVE ---
     new_txt = st.text_area(
