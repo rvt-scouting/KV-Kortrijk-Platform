@@ -63,7 +63,7 @@ pg_team_analysis = st.Page("views/10_🛡️_Teams.py", title="Team Analyse", ic
 
 # C. Scouting Modules
 pg_scout = st.Page("views/4_📝_Scouting.py", title="Scout Rapport Maken", icon="📝")
-pg_shortlists = st.Page("views/9_🎯_Shortlists.py", title="Shortlists Aanvullen", icon="🎯")
+pg_shortlists = st.Page("views/9_🎯_Shortlists.py", title="Shortlists Manager", icon="🎯")
 pg_dashboard = st.Page("views/7_📊_Scouting_Overzicht.py", title="Scouting Dashboard", icon="📈")
 pg_offer = st.Page("views/6_📥_Aangeboden.py", title="Transfermarkt (Aangeboden)", icon="📥")
 pg_disc = st.Page("views/5_🔎_Discover.py", title="Data Discover", icon="🔎")
