@@ -158,48 +158,98 @@ st.sidebar.divider()
 st.sidebar.write(f"👤 **Scout:** {current_scout_name}")
 
 # -----------------------------------------------------------------------------
-# 3. SPELERS OPHALEN (Officieel + Geheugen)
+# 3. SPELERS OPHALEN (Gecorrigeerd voor match_details_full)
 # -----------------------------------------------------------------------------
 df_players = pd.DataFrame()
 players_list = []
 
-# A. Officiële data uit Match Details
 if selected_match_id:
-    df_json = run_query('SELECT "squadHome", "squadAway" FROM public.match_details_full WHERE "id" = %s', params=(selected_match_id,))
-    if not df_json.empty:
+    # We gebruiken dubbele aanhalingstekens voor de hoofdlettergevoelige kolommen in Postgres
+    query = 'SELECT "id", "squadHome", "squadAway" FROM public.match_details_full WHERE "id" = %s'
+    df_json = run_query(query, params=(selected_match_id,))
+    
+    if df_json is not None and not df_json.empty:
+        # In Postgres/Psycopg2 wordt jsonb vaak direct als dict teruggegeven
         for side in ['Home', 'Away']:
-            try:
-                data = json.loads(df_json.iloc[0][f'squad{side}'])
-                for p in data.get('players', []):
-                    players_list.append({'player_id': str(p['id']), 'shirt_number': p.get('shirtNumber', 99), 'side': side.lower(), 'source': 'official'})
-            except: pass
+            col_name = f'squad{side}'
+            raw_data = df_json.iloc[0][col_name]
+            
+            # Controleer of de data een string is (moet geload worden) of al een dict
+            if isinstance(raw_data, str):
+                try:
+                    data = json.loads(raw_data)
+                except Exception as e:
+                    st.error(f"Fout bij parsen JSON voor {side}: {e}")
+                    data = {}
+            else:
+                data = raw_data
 
-# B. Geheugen: Reeds gescoute spelers voor deze match ophalen
+            # Impect JSON structuur check: de spelers zitten meestal in een lijst 'players'
+            if data and isinstance(data, dict) and 'players' in data:
+                for p in data['players']:
+                    players_list.append({
+                        'player_id': str(p.get('id')), 
+                        'shirt_number': p.get('shirtNumber', p.get('shirt_number', 0)), 
+                        'side': side.lower(), 
+                        'source': 'official',
+                        'commonname': p.get('name', p.get('commonname', None)) # Probeer naam alvast uit JSON te halen
+                    })
+    else:
+        st.warning(f"Geen match details gevonden in `public.match_details_full` voor ID: {selected_match_id}")
+
+# B. Voeg spelers uit de scouting.rapporten toe (de 'extra' spelers)
 q_rep = """
     SELECT r.speler_id, r.custom_speler_naam, p.commonname 
-    FROM scouting.rapporten r LEFT JOIN public.players p ON r.speler_id = p.id 
+    FROM scouting.rapporten r 
+    LEFT JOIN public.players p ON r.speler_id = p.id 
     WHERE (r.wedstrijd_id = %s OR r.custom_wedstrijd_naam = %s)
 """
 df_rep = run_query(q_rep, params=(selected_match_id, custom_match_name))
-for _, r in df_rep.iterrows():
-    pid = str(r['speler_id']) if r['speler_id'] else None
-    pname = r['commonname'] if r['commonname'] else r['custom_speler_naam']
-    if not any(p['player_id'] == pid for p in players_list if pid) and not any(p.get('commonname') == pname for p in players_list if not pid):
-        players_list.append({'player_id': pid, 'shirt_number': 0, 'side': 'extra', 'source': 'reported', 'commonname': pname})
 
+if df_rep is not None and not df_rep.empty:
+    for _, r in df_rep.iterrows():
+        pid = str(r['speler_id']) if r['speler_id'] else None
+        pname = r['commonname'] if r['commonname'] else r['custom_speler_naam']
+        
+        # Voorkom dubbele entries als een speler zowel officieel als in rapporten staat
+        exists = any(p['player_id'] == pid for p in players_list if pid)
+        if not exists:
+            players_list.append({
+                'player_id': pid, 
+                'shirt_number': 0, 
+                'side': 'extra', 
+                'source': 'reported', 
+                'commonname': pname
+            })
+
+# C. Namen aanvullen vanuit public.players als ze nog ontbreken
 if players_list:
     df_players = pd.DataFrame(players_list)
-    ids_to_fetch = tuple(df_players[df_players['commonname'].isna()]['player_id'].unique())
-    if ids_to_fetch:
-        q_n = f"SELECT id, commonname FROM public.players WHERE id IN %s"
-        df_n = run_query(q_n, params=(ids_to_fetch,))
-        df_n['id'] = df_n['id'].astype(str)
-        for _, rn in df_n.iterrows():
-            df_players.loc[df_players['player_id'] == rn['id'], 'commonname'] = rn['commonname']
     
-    df_players['commonname'] = df_players['commonname'].fillna("Onbekend")
-    # Sorteren op PIN eerst
-    df_players['is_watched'] = df_players.apply(lambda r: (str(r['player_id']) if r['player_id'] else r['commonname']) in st.session_state.watched_players, axis=1)
+    # Zoek IDs waar we nog geen naam voor hebben
+    missing_mask = df_players['commonname'].isna() & df_players['player_id'].notna()
+    ids_to_fetch = df_players.loc[missing_mask, 'player_id'].unique().tolist()
+    
+    if ids_to_fetch:
+        # Veilig omzetten naar tuple voor SQL
+        q_n = "SELECT id, commonname FROM public.players WHERE id IN %s"
+        df_n = run_query(q_n, params=(tuple(ids_to_fetch),))
+        
+        if df_n is not None and not df_n.empty:
+            df_n['id'] = df_n['id'].astype(str)
+            name_dict = dict(zip(df_n['id'], df_n['commonname']))
+            df_players['commonname'] = df_players.apply(
+                lambda x: name_dict.get(x['player_id'], x['commonname']) if pd.isna(x['commonname']) else x['commonname'],
+                axis=1
+            )
+    
+    df_players['commonname'] = df_players['commonname'].fillna("Onbekende Speler")
+    
+    # Pinning logica
+    df_players['is_watched'] = df_players.apply(
+        lambda r: (str(r['player_id']) if r['player_id'] else r['commonname']) in st.session_state.watched_players, 
+        axis=1
+    )
     df_players = df_players.sort_values(by=['is_watched', 'side', 'shirt_number'], ascending=[False, True, True])
 
 # -----------------------------------------------------------------------------
