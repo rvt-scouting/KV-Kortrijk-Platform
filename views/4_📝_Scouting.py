@@ -387,7 +387,7 @@ with col_editor:
         s_idx = s_opts.index(draft.get('sl')) if draft.get('sl') in s_opts else 0
         new_sl = st.selectbox("Shortlist", s_opts, index=s_idx, format_func=lambda x: s_lbls[s_opts.index(x)], key=f"sl_{d_key}")
 
-    new_txt = st.text_area("Analyse", draft.get('txt', ""), height=250, key=f"tx_{d_key}")
+    new_txt = st.text_area("Analyse", value=draft.get('txt', ""), height=250, key=f"tx_{d_key}", on_change=sync_text_to_draft)
     new_gold = st.checkbox("🏆 Gouden Buzzer", draft.get('gold', False), key=f"gd_{d_key}")
 
     if st.button("💾 Rapport Opslaan", type="primary", use_container_width=True):
