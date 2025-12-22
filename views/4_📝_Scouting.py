@@ -250,7 +250,6 @@ if players_list:
 # -----------------------------------------------------------------------------
 col_list, col_editor = st.columns([1, 2])
 
-# --- AANPASSING IN SECTIE 4 (Linkerkolom) ---
 with col_list:
     st.subheader("Selecties")
     sel_tab = st.radio("Team", [home_team_name, away_team_name, "Extra"], horizontal=True, label_visibility="collapsed")
@@ -261,18 +260,22 @@ with col_list:
         for _, row in filtered.iterrows():
             p_id = row['player_id']
             p_name = row['commonname']
-            p_nr = int(row['shirt_number']) if row['shirt_number'] else "?" # Het rugnummer
+            p_nr = int(row['shirt_number']) if row['shirt_number'] and row['shirt_number'] != 0 else "?"
             p_key = p_id if p_id else p_name
             d_key = f"{selected_match_id if selected_match_id else custom_match_name}_{p_key}_{current_scout_id}"
             
             c_pin, c_btn = st.columns([0.15, 0.85])
             with c_pin:
-                st.checkbox("📌", value=row['is_watched'], key=f"p_{p_key}", label_visibility="collapsed")
+                # Als de checkbox verandert, updaten we de set en herladen we de pagina voor hersortering
+                is_p = st.checkbox("📌", value=row['is_watched'], key=f"p_{p_key}_{side_f}", label_visibility="collapsed")
+                if is_p != row['is_watched']:
+                    if is_p: st.session_state.watched_players.add(p_key)
+                    else: st.session_state.watched_players.discard(p_key)
+                    st.rerun()
+
             with c_btn:
                 style = "primary" if st.session_state.active_player_id == p_id and p_id else "secondary"
-                icon = "📝" if d_key in st.session_state.scout_drafts else "👤"
-                
-                # HIER VOEGEN WE HET RUGNUMMER TOE AAN DE LABEL (#nr)
+                icon = "✅" if d_key in st.session_state.scout_drafts else ("📥" if row['source'] == 'reported' else "👤")
                 if st.button(f"{icon} #{p_nr} {p_name}", key=f"b_{p_key}", type=style, use_container_width=True):
                     st.session_state.active_player_id = p_id
                     st.session_state.manual_player_mode = (p_id is None)
@@ -295,7 +298,6 @@ with col_list:
                         st.session_state.active_player_id = str(r['id']); st.session_state.manual_player_mode = False; st.rerun()
         else:
             st.session_state.manual_player_name_text = st.text_input("Naam Speler:")
-
 # -----------------------------------------------------------------------------
 # 5. EDITOR (RECHTS)
 # -----------------------------------------------------------------------------
