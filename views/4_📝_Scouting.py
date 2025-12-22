@@ -95,6 +95,14 @@ def save_report_to_db(data):
     finally:
         if conn: conn.close()
 
+def sync_text_to_draft():
+    """Zorgt dat de getypte tekst direct in de draft-sessie wordt opgeslagen."""
+    # We halen de huidige sleutel (match_player_scout) op
+    d_key = st.session_state.get('active_d_key')
+    if d_key:
+        # We pakken de tekst uit het tekstvak en zetten die in de draft
+        st.session_state.scout_drafts[d_key]["txt"] = st.session_state[f"tx_{d_key}"]
+
 # -----------------------------------------------------------------------------
 # 2. WEDSTRIJD SELECTIE
 # -----------------------------------------------------------------------------
@@ -318,21 +326,39 @@ with col_editor:
     match_key = selected_match_id if selected_match_id else custom_match_name
     p_key = a_pid if a_pid else a_pname
     d_key = f"{match_key}_{p_key}_{current_scout_id}"
-    
+    st.session_state.active_d_key = d_key # Nodig voor de sync_text functie
+
+    # CHECK: Hebben we dit rapport al in ons tijdelijk geheugen OF in de database?
     if d_key not in st.session_state.scout_drafts:
-        q_ex = "SELECT * FROM scouting.rapporten WHERE scout_id=%s AND (speler_id=%s OR custom_speler_naam=%s) AND (wedstrijd_id=%s OR custom_wedstrijd_naam=%s)"
+        # Zoek in de database of er al een bestaand rapport is 
+        q_ex = """
+            SELECT * FROM scouting.rapporten 
+            WHERE scout_id=%s AND (speler_id=%s OR custom_speler_naam=%s) 
+            AND (wedstrijd_id=%s OR custom_wedstrijd_naam=%s)
+        """
         db_r = run_query(q_ex, (current_scout_id, a_pid, a_pname, selected_match_id, custom_match_name))
-        if not db_r.empty:
+        
+        if db_r is not None and not db_r.empty:
+            # ER IS DATA: Laad deze in de sessie 
             rec = db_r.iloc[0]
             st.session_state.scout_drafts[d_key] = {
-                "pos": rec.get('positie_gespeeld'), "rate": int(rec.get('beoordeling', 6)), 
-                "adv": rec.get('advies'), "txt": rec.get('rapport_tekst', ""),
-                "gold": bool(rec.get('gouden_buzzer', False)), "sl": rec.get('shortlist_id'), 
-                "len": int(rec.get('speler_lengte', 0) or 0), "con": rec.get('contract_einde'),
+                "pos": rec.get('positie_gespeeld'), 
+                "rate": int(rec.get('beoordeling', 6)), 
+                "adv": rec.get('advies'), 
+                "txt": rec.get('rapport_tekst', ""),
+                "gold": bool(rec.get('gouden_buzzer', False)), 
+                "sl": rec.get('shortlist_id'), 
+                "len": int(rec.get('speler_lengte', 0) or 0), 
+                "con": rec.get('contract_einde'),
                 "prof": rec.get('profiel_code')
             }
         else:
-            st.session_state.scout_drafts[d_key] = {"pos": None, "rate": 6, "adv": None, "txt": "", "gold": False, "sl": None, "len": 0, "con": datetime.date.today(), "prof": None}
+            # GEEN DATA: Maak een nieuw leeg rapport 
+            st.session_state.scout_drafts[d_key] = {
+                "pos": None, "rate": 6, "adv": None, "txt": "", 
+                "gold": False, "sl": None, "len": 0, 
+                "con": datetime.date.today(), "prof": None
+            }
 
     draft = st.session_state.scout_drafts[d_key]
     c1, c2 = st.columns(2)
