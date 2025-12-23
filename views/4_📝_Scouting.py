@@ -230,7 +230,75 @@ else:
 st.sidebar.divider()
 st.sidebar.write(f"👤 **Scout:** {current_scout_name}")
 
-Even geduld, ik ben nog bezig met de app. Ik laat u weten als ik klaar ben!
+# -----------------------------------------------------------------------------
+# 3. SPELERS OPHALEN (Verbeterde versie)
+# -----------------------------------------------------------------------------
+df_players = pd.DataFrame()
+players_list = []
+
+# A. Officiele Spelers uit de wedstrijd-JSON
+if selected_match_id:
+    df_json = run_query('SELECT "squadHome", "squadAway" FROM public.match_details_full WHERE "id" = %s', params=(selected_match_id,))
+    if df_json is not None and not df_json.empty:
+        for side in ['Home', 'Away']:
+            raw_data = df_json.iloc[0][f'squad{side}']
+            data = json.loads(raw_data) if isinstance(raw_data, str) else raw_data
+            if data and 'players' in data:
+                for p in data['players']:
+                    players_list.append({
+                        'player_id': str(p.get('id')), 
+                        'shirt_number': p.get('shirtNumber', 0), 
+                        'side': side.lower(), 
+                        'source': 'official',
+                        'commonname': p.get('name', None)
+                    })
+
+# B. Reeds gerapporteerde spelers uit de Database (Extra spelers)
+q_rep = """
+    SELECT r.speler_id, r.custom_speler_naam, p.commonname 
+    FROM scouting.rapporten r 
+    LEFT JOIN public.players p ON r.speler_id = p.id 
+    WHERE (r.wedstrijd_id = %s OR r.custom_wedstrijd_naam = %s)
+"""
+df_rep = run_query(q_rep, params=(selected_match_id, custom_match_name))
+
+if df_rep is not None and not df_rep.empty:
+    for _, r in df_rep.iterrows():
+        pid = str(r['speler_id']) if r['speler_id'] else None
+        pname = r['commonname'] if r['commonname'] else r['custom_speler_naam']
+        
+        # Verbeterde check op dubbelen (check op ID OF op Naam)
+        exists = any(p['player_id'] == pid for p in players_list if pid) or \
+                 any(p['commonname'] == pname for p in players_list if not pid)
+        
+        if not exists:
+            players_list.append({
+                'player_id': pid, 'shirt_number': 0, 'side': 'extra', 
+                'source': 'reported', 'commonname': pname
+            })
+
+# C. INJECTIE: Voeg de actieve manuele speler toe aan de lijst (Live feedback)
+if st.session_state.manual_player_mode and st.session_state.manual_player_name_text:
+    active_name = st.session_state.manual_player_name_text
+    if not any(p['commonname'] == active_name for p in players_list):
+        players_list.append({
+            'player_id': None, 'shirt_number': 0, 'side': 'extra', 
+            'source': 'draft', 'commonname': active_name
+        })
+
+if players_list:
+    df_players = pd.DataFrame(players_list)
+    # ... (rest van je bestaande naam-ophaling en sortering blijft gelijk) ...
+    miss_ids = df_players[df_players['commonname'].isna()]['player_id'].unique().tolist()
+    if miss_ids:
+        df_n = run_query("SELECT id, commonname FROM public.players WHERE id IN %s", (tuple(miss_ids),))
+        if df_n is not None:
+            name_map = dict(zip(df_n['id'].astype(str), df_n['commonname']))
+            df_players['commonname'] = df_players.apply(lambda x: name_map.get(x['player_id'], x['commonname']), axis=1)
+    
+    df_players['commonname'] = df_players['commonname'].fillna("Onbekend")
+    df_players['is_watched'] = df_players.apply(lambda r: (str(r['player_id']) if r['player_id'] else r['commonname']) in st.session_state.watched_players, axis=1)
+    df_players = df_players.sort_values(by=['is_watched', 'side', 'shirt_number'], ascending=[False, True, True])
 # -----------------------------------------------------------------------------
 # 4. UI: SPELERSLIJST (LINKS)
 # -----------------------------------------------------------------------------
