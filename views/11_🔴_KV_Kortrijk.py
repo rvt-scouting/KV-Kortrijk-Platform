@@ -110,7 +110,7 @@ for db_pos, display_label in display_positions:
             st.dataframe(averages.style.background_gradient(cmap='RdYlGn', axis=1, vmin=40, vmax=80).format("{:.1f}"), use_container_width=True)
 
             if not df_target_pivot.empty:
-                with st.expander("🎯 Aanbevolen Versterkingen (Top 15, <25j, 2 laatste seizoenen)"):
+                with st.expander("🎯 Aanbevolen Versterkingen (Top 25, <25j, 2 laatste seizoenen)"):
                     st.dataframe(df_target_pivot.style.background_gradient(cmap='RdYlGn', axis=None, vmin=40, vmax=80).format("{:.1f}", na_rep="-"), use_container_width=True)
 
         # --- TAB 2: SPIDER CHARTS ---
