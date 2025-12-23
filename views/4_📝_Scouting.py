@@ -433,7 +433,7 @@ with col_editor:
         else:
             st.session_state.scout_drafts[d_key] = {
                 "pos": None, "rate": 6, "adv": None, "txt": "", 
-                "gold": False, "sl": None, "len": 0, "con": datetime.date.today(), "prof": None
+                "gold": False, "sl": None, "len": 0, "con": None, "prof": None
             }
 
     draft = st.session_state.scout_drafts[d_key]
@@ -458,7 +458,7 @@ with col_editor:
         pr_idx = pr_opts.index(draft.get('prof')) if draft.get('prof') in pr_opts else 0
         new_prof = st.selectbox("Profiel", pr_opts, index=pr_idx, key=f"prof_{d_key}")
         a_opts = opties_advies['value'].tolist() if not opties_advies.empty else ["No"]
-        a_idx = a_opts.index(draft.get('adv')) if draft.get('adv') in a_opts else 0
+        a_idx = a_opts.index(draft.get('adv')) if draft.get('adv') in a_opts else (a_opts.index("Follow") if "Follow" in a_opts else 0)
         new_adv = st.selectbox("Advies", a_opts, index=a_idx, key=f"adv_{d_key}")
         new_con = st.date_input("Contract", value=draft.get('con'), key=f"cn_{d_key}")
 
