@@ -95,7 +95,7 @@ for db_pos, display_label in display_positions:
             if not df_targets_raw.empty:
                 df_target_pivot = df_targets_raw.pivot_table(index=['Naam', 'Leeftijd', 'Club'], columns='metric_name', values='score', aggfunc='mean')
                 df_target_pivot['Gaten Gedicht'] = df_target_pivot[weak_metrics.index].gt(60).sum(axis=1)
-                df_target_pivot = df_target_pivot.sort_values('Gaten Gedicht', ascending=False).head(15)
+                df_target_pivot = df_target_pivot.sort_values('Gaten Gedicht', ascending=False).head(25)
 
         # TABS INITIALISEREN
         tab1, tab2 = st.tabs(["📋 Data Matrix", "🕸️ Spider Charts"])
