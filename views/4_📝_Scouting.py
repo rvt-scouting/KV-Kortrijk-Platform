@@ -94,7 +94,16 @@ def save_report_to_db(data):
         st.error(f"Save Error: {e}"); return False
     finally:
         if conn: conn.close()
-
+            
+def update_match_url():
+    """Update de URL direct wanneer de scout een andere wedstrijd kiest."""
+    if "match_selector" in st.session_state:
+        sel_label = st.session_state.match_selector
+        if "match_options_lookup" in st.session_state:
+            # We gebruiken 'is not None' om de Pandas ValueError te voorkomen
+            match_row = st.session_state.match_options_lookup.get(sel_label)
+            if match_row is not None: 
+                st.query_params["match_id"] = str(match_row['id'])
         
 def sync_text_to_draft():
     """Slaat de getypte tekst direct op in de sessie-draft."""
@@ -104,16 +113,7 @@ def sync_text_to_draft():
         # We slaan ook het tijdstip van de laatste wijziging op
         st.session_state[f"last_sync_{d_key}"] = datetime.datetime.now().strftime("%H:%M:%S")
 
-def update_match_url():
-    """Update de URL direct wanneer de scout een andere wedstrijd kiest."""
-    if "match_selector" in st.session_state:
-        # Haal de geselecteerde match op uit de widget
-        sel_label = st.session_state.match_selector
-        # We halen de ID uit de dictionary die we later in de UI bouwen
-        if "match_options_lookup" in st.session_state:
-            match_row = st.session_state.match_options_lookup.get(sel_label)
-            if match_row:
-                st.query_params["match_id"] = str(match_row['id'])
+
 # -----------------------------------------------------------------------------
 # 2. WEDSTRIJD SELECTIE
 # -----------------------------------------------------------------------------
