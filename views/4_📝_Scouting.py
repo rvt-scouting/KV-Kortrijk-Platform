@@ -119,12 +119,20 @@ def sync_text_to_draft():
 # -----------------------------------------------------------------------------
 st.title("📝 Live Match Scouting")
 
-# Initialisatie basis variabelen
+# --- CRUCIAAL: Haal de opties ALTIJD op aan het begin ---
+# Deze stonden waarschijnlijk in de vorige versie die je gewist hebt
+opties_posities = get_scouting_options_safe('opties_posities')
+opties_profielen = get_scouting_options_safe('opties_profielen')
+opties_advies = get_scouting_options_safe('opties_advies')
+opties_shortlists = get_scouting_options_safe('shortlists')
+
+# Initialisatie basis variabelen (hou deze ook hier)
 selected_match_id = None
 selected_comp_id = None
 custom_match_name = None
 home_team_name = "Thuis"
 away_team_name = "Uit"
+
 
 st.sidebar.header("Match Setup")
 is_manual_match = st.sidebar.checkbox("🔓 Manuele Wedstrijd", help="Voor oefenmatchen.")
