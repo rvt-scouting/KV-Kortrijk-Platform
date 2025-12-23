@@ -231,19 +231,19 @@ st.sidebar.divider()
 st.sidebar.write(f"👤 **Scout:** {current_scout_name}")
 
 # -----------------------------------------------------------------------------
-# 3. SPELERS OPHALEN (Verbeterde versie)
+# 3. SPELERS OPHALEN (Gecorrigeerd voor Rugnummers & Extra Spelers)
 # -----------------------------------------------------------------------------
 df_players = pd.DataFrame()
 players_list = []
 
-# A. Officiele Spelers uit de wedstrijd-JSON
+# A. Officiele Spelers uit Match Details JSON
 if selected_match_id:
     df_json = run_query('SELECT "squadHome", "squadAway" FROM public.match_details_full WHERE "id" = %s', params=(selected_match_id,))
     if df_json is not None and not df_json.empty:
         for side in ['Home', 'Away']:
             raw_data = df_json.iloc[0][f'squad{side}']
             data = json.loads(raw_data) if isinstance(raw_data, str) else raw_data
-            if data and 'players' in data:
+            if data and isinstance(data, dict) and 'players' in data:
                 for p in data['players']:
                     players_list.append({
                         'player_id': str(p.get('id')), 
@@ -253,7 +253,7 @@ if selected_match_id:
                         'commonname': p.get('name', None)
                     })
 
-# B. Reeds gerapporteerde spelers uit de Database (Extra spelers)
+# B. Reeds gerapporteerde spelers (Database recovery)
 q_rep = """
     SELECT r.speler_id, r.custom_speler_naam, p.commonname 
     FROM scouting.rapporten r 
@@ -267,7 +267,7 @@ if df_rep is not None and not df_rep.empty:
         pid = str(r['speler_id']) if r['speler_id'] else None
         pname = r['commonname'] if r['commonname'] else r['custom_speler_naam']
         
-        # Verbeterde check op dubbelen (check op ID OF op Naam)
+        # Voorkom dubbelen (check op ID of op Naam)
         exists = any(p['player_id'] == pid for p in players_list if pid) or \
                  any(p['commonname'] == pname for p in players_list if not pid)
         
@@ -277,28 +277,31 @@ if df_rep is not None and not df_rep.empty:
                 'source': 'reported', 'commonname': pname
             })
 
-# C. INJECTIE: Voeg de actieve manuele speler toe aan de lijst (Live feedback)
+# C. LIVE INJECTIE: Voeg de speler die je nu typt direct toe aan de lijst
 if st.session_state.manual_player_mode and st.session_state.manual_player_name_text:
-    active_name = st.session_state.manual_player_name_text
-    if not any(p['commonname'] == active_name for p in players_list):
+    m_name = st.session_state.manual_player_name_text
+    if not any(p['commonname'] == m_name for p in players_list):
         players_list.append({
             'player_id': None, 'shirt_number': 0, 'side': 'extra', 
-            'source': 'draft', 'commonname': active_name
+            'source': 'draft', 'commonname': m_name
         })
 
 if players_list:
     df_players = pd.DataFrame(players_list)
-    # ... (rest van je bestaande naam-ophaling en sortering blijft gelijk) ...
-    miss_ids = df_players[df_players['commonname'].isna()]['player_id'].unique().tolist()
-    if miss_ids:
-        df_n = run_query("SELECT id, commonname FROM public.players WHERE id IN %s", (tuple(miss_ids),))
+    # Vul ontbrekende namen aan vanuit de database
+    miss_mask = df_players['commonname'].isna() & df_players['player_id'].notna()
+    ids_to_fetch = df_players.loc[miss_mask, 'player_id'].unique().tolist()
+    if ids_to_fetch:
+        df_n = run_query("SELECT id, commonname FROM public.players WHERE id IN %s", (tuple(ids_to_fetch),))
         if df_n is not None:
-            name_map = dict(zip(df_n['id'].astype(str), df_n['commonname']))
-            df_players['commonname'] = df_players.apply(lambda x: name_map.get(x['player_id'], x['commonname']), axis=1)
+            n_map = dict(zip(df_n['id'].astype(str), df_n['commonname']))
+            df_players['commonname'] = df_players.apply(lambda x: n_map.get(x['player_id'], x['commonname']), axis=1)
     
     df_players['commonname'] = df_players['commonname'].fillna("Onbekend")
+    # Sortering (Gepind bovenaan)
     df_players['is_watched'] = df_players.apply(lambda r: (str(r['player_id']) if r['player_id'] else r['commonname']) in st.session_state.watched_players, axis=1)
     df_players = df_players.sort_values(by=['is_watched', 'side', 'shirt_number'], ascending=[False, True, True])
+
 # -----------------------------------------------------------------------------
 # 4. UI: SPELERSLIJST (LINKS)
 # -----------------------------------------------------------------------------
@@ -312,24 +315,25 @@ with col_list:
     if not df_players.empty:
         filtered = df_players[df_players['side'] == side_f]
         for _, row in filtered.iterrows():
-            p_id = row['player_id']
-            p_name = row['commonname']
-            p_nr = int(row['shirt_number']) if row['shirt_number'] and row['shirt_number'] != 0 else "?"
+            p_id, p_name = row['player_id'], row['commonname']
+            p_nr = int(row['shirt_number']) if row['shirt_number'] != 0 else "?"
             p_key = p_id if p_id else p_name
             d_key = f"{selected_match_id if selected_match_id else custom_match_name}_{p_key}_{current_scout_id}"
             
             c_pin, c_btn = st.columns([0.15, 0.85])
             with c_pin:
-                # Als de checkbox verandert, updaten we de set en herladen we de pagina voor hersortering
                 is_p = st.checkbox("📌", value=row['is_watched'], key=f"p_{p_key}_{side_f}", label_visibility="collapsed")
                 if is_p != row['is_watched']:
-                    if is_p: st.session_state.watched_players.add(p_key)
-                    else: st.session_state.watched_players.discard(p_key)
+                    st.session_state.watched_players.add(p_key) if is_p else st.session_state.watched_players.discard(p_key)
                     st.rerun()
-
             with c_btn:
+                # Icoontje bepalen
+                if d_key in st.session_state.scout_drafts: icon = "✅"
+                elif row['source'] == 'draft': icon = "✍️"
+                elif row['source'] == 'reported': icon = "📥"
+                else: icon = "👤"
+                
                 style = "primary" if st.session_state.active_player_id == p_id and p_id else "secondary"
-                icon = "✅" if d_key in st.session_state.scout_drafts else ("📥" if row['source'] == 'reported' else "👤")
                 if st.button(f"{icon} #{p_nr} {p_name}", key=f"b_{p_key}", type=style, use_container_width=True):
                     st.session_state.active_player_id = p_id
                     st.session_state.manual_player_mode = (p_id is None)
@@ -351,7 +355,9 @@ with col_list:
                     if st.button(f"👤 {r['commonname']}{club_txt}", key=f"s_{r['id']}", use_container_width=True):
                         st.session_state.active_player_id = str(r['id']); st.session_state.manual_player_mode = False; st.rerun()
         else:
+            # Als je hier typt, zorgt Deel 3C dat de naam direct links verschijnt
             st.session_state.manual_player_name_text = st.text_input("Naam Speler:")
+
 # -----------------------------------------------------------------------------
 # 5. EDITOR (RECHTS)
 # -----------------------------------------------------------------------------
@@ -359,26 +365,21 @@ with col_editor:
     a_pid = st.session_state.active_player_id
     a_pname = st.session_state.manual_player_name_text if not a_pid else "Laden..."
     
-    # Haal de naam op als we een ID hebben
     if a_pid:
         res_n = run_query("SELECT commonname FROM public.players WHERE id = %s", params=(a_pid,))
         if not res_n.empty: a_pname = res_n.iloc[0]['commonname']
     
     if not a_pname or a_pname == "Laden...":
-        st.info("👈 Selecteer een speler aan de linkerkant om het rapport te openen."); st.stop()
+        st.info("👈 Selecteer een speler om het rapport te openen."); st.stop()
 
-    # Unieke sleutel voor dit specifieke rapport (Match + Speler + Scout)
     match_key = selected_match_id if selected_match_id else custom_match_name
     p_key = a_pid if a_pid else a_pname
     d_key = f"{match_key}_{p_key}_{current_scout_id}"
     st.session_state.active_d_key = d_key 
 
-    # --- INITIALISATIE / HERSTEL UIT DATABASE ---
     if d_key not in st.session_state.scout_drafts:
-        # Check of er al data in de DB staat voor deze speler/match 
         q_ex = """
-            SELECT * FROM scouting.rapporten 
-            WHERE scout_id = %s 
+            SELECT * FROM scouting.rapporten WHERE scout_id = %s 
             AND (speler_id = %s OR custom_speler_naam = %s) 
             AND (wedstrijd_id = %s OR custom_wedstrijd_naam = %s)
             ORDER BY aangemaakt_op DESC LIMIT 1
@@ -388,106 +389,55 @@ with col_editor:
         if db_r is not None and not db_r.empty:
             rec = db_r.iloc[0]
             st.session_state.scout_drafts[d_key] = {
-                "pos": rec.get('positie_gespeeld'), 
-                "rate": int(rec.get('beoordeling', 6)), 
-                "adv": rec.get('advies'), 
-                "txt": rec.get('rapport_tekst', ""),
-                "gold": bool(rec.get('gouden_buzzer', False)), 
-                "sl": rec.get('shortlist_id'), 
-                "prof": rec.get('profiel_code'),
-                "len": 0, # Vul aan als deze kolommen bestaan
-                "con": datetime.date.today()
+                "pos": rec.get('positie_gespeeld'), "rate": int(rec.get('beoordeling', 6)), 
+                "adv": rec.get('advies'), "txt": rec.get('rapport_tekst', ""),
+                "gold": bool(rec.get('gouden_buzzer', False)), "sl": rec.get('shortlist_id'), 
+                "prof": rec.get('profiel_code'), "len": int(rec.get('speler_lengte', 0) or 0), 
+                "con": rec.get('contract_einde', datetime.date.today())
             }
-            st.session_state[f"status_{d_key}"] = "Bestaand rapport geladen uit database."
+            st.session_state[f"status_{d_key}"] = "Rapport geladen."
         else:
-            # Volledig nieuw rapport
             st.session_state.scout_drafts[d_key] = {
                 "pos": None, "rate": 6, "adv": None, "txt": "", 
-                "gold": False, "sl": None, "len": 0, 
-                "con": datetime.date.today(), "prof": None
+                "gold": False, "sl": None, "len": 0, "con": datetime.date.today(), "prof": None
             }
 
-    # Haal de huidige werk-versie op
     draft = st.session_state.scout_drafts[d_key]
 
-    # --- HEADER MET STATUS ---
-    h_col1, h_col2 = st.columns([0.7, 0.3])
-    with h_col1:
-        st.subheader(f"📝 Rapport: {a_pname}")
-    with h_col2:
-        sync_time = st.session_state.get(f"last_sync_{d_key}", "")
-        if sync_time:
-            st.caption(f"✅ Opgeslagen in geheugen: {sync_time}")
-        else:
-            st.caption(st.session_state.get(f"status_{d_key}", "Nieuw rapport"))
+    # Header & Status
+    h1, h2 = st.columns([0.7, 0.3])
+    with h1: st.subheader(f"📝 Rapport: {a_pname}")
+    with h2:
+        sync_t = st.session_state.get(f"last_sync_{d_key}", "")
+        st.caption(f"🛡️ {sync_t}" if sync_t else st.session_state.get(f"status_{d_key}", ""))
 
-    # --- INPUT VELDEN ---
     c1, c2 = st.columns(2)
     with c1:
-        # Positie selectie 
-        p_opts = opties_posities['value'].tolist() if not opties_posities.empty else ["Onbekend"]
-        p_lbls = opties_posities['label'].tolist() if not opties_posities.empty else ["Onbekend"]
+        p_opts = opties_posities['value'].tolist() if not opties_posities.empty else ["?"]
+        p_lbls = opties_posities['label'].tolist() if not opties_posities.empty else ["?"]
         p_idx = p_opts.index(draft.get('pos')) if draft.get('pos') in p_opts else 0
         new_pos = st.selectbox("Positie", p_opts, index=p_idx, format_func=lambda x: p_lbls[p_opts.index(x)], key=f"pos_{d_key}")
-        
         new_len = st.number_input("Lengte (cm)", 0, 230, int(draft.get('len', 0)), key=f"len_{d_key}")
-        new_rate = st.slider("Beoordeling (1-10)", 1, 10, int(draft.get('rate', 6)), key=f"rt_{d_key}")
-
+        new_rate = st.slider("Beoordeling", 1, 10, int(draft.get('rate', 6)), key=f"rt_{d_key}")
     with c2:
-        # Profiel selectie 
         pr_opts = opties_profielen['value'].tolist() if not opties_profielen.empty else ["P1"]
         pr_idx = pr_opts.index(draft.get('prof')) if draft.get('prof') in pr_opts else 0
-        new_prof = st.selectbox("Profiel Code", pr_opts, index=pr_idx, key=f"prof_{d_key}")
-
-        # Advies selectie 
-        a_opts = opties_advies['value'].tolist() if not opties_advies.empty else ["Nog te bepalen"]
-        a_lbls = opties_advies['label'].tolist() if not opties_advies.empty else ["Nog te bepalen"]
+        new_prof = st.selectbox("Profiel", pr_opts, index=pr_idx, key=f"prof_{d_key}")
+        a_opts = opties_advies['value'].tolist() if not opties_advies.empty else ["No"]
         a_idx = a_opts.index(draft.get('adv')) if draft.get('adv') in a_opts else 0
-        new_adv = st.selectbox("Advies", a_opts, index=a_idx, format_func=lambda x: a_lbls[a_opts.index(x)], key=f"adv_{d_key}")
-        
-        new_con = st.date_input("Contract Einde", value=draft.get('con') if draft.get('con') else datetime.date.today(), key=f"cn_{d_key}")
+        new_adv = st.selectbox("Advies", a_opts, index=a_idx, key=f"adv_{d_key}")
+        new_con = st.date_input("Contract", value=draft.get('con'), key=f"cn_{d_key}")
 
-    # Shortlist selectie 
-    s_opts = [None] + (opties_shortlists['value'].tolist() if not opties_shortlists.empty else [])
-    s_lbls = ["Geen Shortlist"] + (opties_shortlists['label'].tolist() if not opties_shortlists.empty else [])
-    s_idx = s_opts.index(draft.get('sl')) if draft.get('sl') in s_opts else 0
-    new_sl = st.selectbox("Referentiematch toevoegen aan shortlist?", s_opts, index=s_idx, format_func=lambda x: s_lbls[s_opts.index(x)], key=f"sl_{d_key}")
+    new_txt = st.text_area("Analyse", value=draft.get('txt', ""), height=300, key=f"tx_{d_key}", on_change=sync_text_to_draft)
+    new_gold = st.checkbox("🏆 Gouden Buzzer", draft.get('gold', False), key=f"gd_{d_key}")
 
-    # --- TEXT AREA MET AUTOSAVE ---
-    new_txt = st.text_area(
-        "Uitgebreide Analyse", 
-        value=draft.get('txt', ""), 
-        height=300, 
-        key=f"tx_{d_key}",
-        on_change=sync_text_to_draft, # Slaat tekst op zodra je buiten het vak klikt
-        help="Druk op Ctrl+Enter of klik buiten het vak om de tekst tijdelijk te bewaren."
-    )
-    
-    new_gold = st.checkbox("🏆 Gouden Buzzer (Top Talent)", draft.get('gold', False), key=f"gd_{d_key}")
-
-    # --- DEFINITIEVE OPSLAG ---
-    if st.button("💾 DEFINITIEF OPSLAAN IN DATABASE", type="primary", use_container_width=True):
+    if st.button("💾 DEFINITIEF OPSLAAN", type="primary", use_container_width=True):
         s_d = {
-            "scout_id": current_scout_id, 
-            "speler_id": a_pid, 
-            "wedstrijd_id": selected_match_id, 
-            "competitie_id": selected_comp_id,
-            "custom_speler_naam": a_pname if not a_pid else None, 
-            "custom_wedstrijd_naam": custom_match_name if not selected_match_id else None,
-            "positie_gespeeld": new_pos, 
-            "profiel_code": new_prof, 
-            "advies": new_adv, 
-            "beoordeling": new_rate, 
-            "rapport_tekst": new_txt,
-            "gouden_buzzer": new_gold, 
-            "shortlist_id": new_sl, 
-            "speler_lengte": new_len, 
-            "contract_einde": new_con
+            "scout_id": current_scout_id, "speler_id": a_pid, "wedstrijd_id": selected_match_id, "competitie_id": selected_comp_id,
+            "custom_speler_naam": a_pname if not a_pid else None, "custom_wedstrijd_naam": custom_match_name if not selected_match_id else None,
+            "positie_gespeeld": new_pos, "profiel_code": new_prof, "advies": new_adv, "beoordeling": new_rate, 
+            "rapport_tekst": new_txt, "gouden_buzzer": new_gold, "shortlist_id": None, "speler_lengte": new_len, "contract_einde": new_con
         }
         if save_report_to_db(s_d):
-            # Update de sessie-versie na succesvolle database opslag
-            st.session_state.scout_drafts[d_key] = {
-                "pos": new_pos, "rate": new_rate, "adv": new_adv, "txt": new_txt, 
-                "gold": new_gold, "sl": new_sl, "len": new_len, "con": new_con, "prof": new_prof
-            }
-            st.success(f"Rapport voor {a_pname} is definitief opgeslagen in de database!"); st.balloons()
+            st.success("Opgeslagen!"); st.balloons()
+
