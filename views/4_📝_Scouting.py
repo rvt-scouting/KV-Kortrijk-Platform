@@ -104,127 +104,128 @@ def sync_text_to_draft():
         # We slaan ook het tijdstip van de laatste wijziging op
         st.session_state[f"last_sync_{d_key}"] = datetime.datetime.now().strftime("%H:%M:%S")
 # -----------------------------------------------------------------------------
-# 2. WEDSTRIJD SELECTIE (MET URL-GEHEUGEN)
+# 2. WEDSTRIJD SELECTIE (MET URL-HERSTEL & ERROR FIX)
 # -----------------------------------------------------------------------------
-st.sidebar.header("Match Setup")
+st.title("📝 Live Match Scouting")
 
-# 1. Check of er al een match_id in de URL staat (na een crash/reload)
+# CRUCIAAL: Initialiseer alle variabelen op None om NameErrors te voorkomen
+selected_match_id = None
+selected_comp_id = None
+custom_match_name = None
+home_team_name = "Thuis"
+away_team_name = "Uit"
+sel_season = None
+sel_comp = None
+
+# Lees de URL parameters (voor herstel na crash)
 url_params = st.query_params
 url_match_id = url_params.get("match_id")
 
-# Variabelen voor de selectie
-sel_season = None
-sel_comp = None
-default_match_idx = 0
+st.sidebar.header("Match Setup")
+is_manual_match = st.sidebar.checkbox("🔓 Manuele Wedstrijd", help="Voor oefenmatchen.")
 
-# Als er een match_id in de URL staat, halen we de details op om de dropdowns voor in te vullen
-if url_match_id and not st.session_state.get('match_initialized'):
-    q_url = """
-        SELECT m.id, i.season, i."competitionName"
-        FROM public.matches m
-        JOIN public.iterations i ON m."iterationId" = i.id
-        WHERE m.id = %s
-    """
-    res_url = run_query(q_url, (url_match_id,))
-    if res_url is not None and not res_url.empty:
-        st.session_state.pre_season = res_url.iloc[0]['season']
-        st.session_state.pre_comp = res_url.iloc[0]['competitionName']
-        st.session_state.match_initialized = True
-
-# --- STAP A: SEIZOEN ---
-df_seasons = run_query("SELECT DISTINCT season FROM public.iterations ORDER BY season DESC")
-if not df_seasons.empty:
-    seasons = df_seasons['season'].tolist()
-    # Gebruik de waarde uit URL als die bestaat
-    pre_sel_s = st.session_state.get('pre_season')
-    s_idx = seasons.index(pre_sel_s) if pre_sel_s in seasons else 0
-    sel_season = st.sidebar.selectbox("1. Seizoen", seasons, index=s_idx)
+if is_manual_match:
+    custom_match_name = st.sidebar.text_input("Naam Wedstrijd", placeholder="bv. KVK - Harelbeke")
+    if not custom_match_name: 
+        st.info("👈 Voer een naam in voor de manuele wedstrijd."); st.stop()
+    st.subheader(f"Wedstrijd: {custom_match_name}")
+    # Reset URL bij manuele match
+    st.query_params.clear()
 else:
-    st.error("Geen seizoenen gevonden."); st.stop()
+    # --- AUTOMATISCH HERSTEL UIT URL ---
+    if url_match_id and not st.session_state.get('match_initialized'):
+        q_url = """
+            SELECT m.id, i.season, i."competitionName"
+            FROM public.matches m
+            JOIN public.iterations i ON m."iterationId" = i.id
+            WHERE m.id = %s
+        """
+        res_url = run_query(q_url, (url_match_id,))
+        if res_url is not None and not res_url.empty:
+            st.session_state.pre_season = res_url.iloc[0]['season']
+            st.session_state.pre_comp = res_url.iloc[0]['competitionName']
+            st.session_state.match_initialized = True
 
-# --- STAP B: COMPETITIE ---
-if sel_season:
-    df_comps = run_query('SELECT DISTINCT "competitionName" FROM public.iterations WHERE season = %s ORDER BY "competitionName"', params=(sel_season,))
-    if not df_comps.empty:
-        comps = df_comps['competitionName'].tolist()
-        pre_sel_c = st.session_state.get('pre_comp')
-        c_idx = comps.index(pre_sel_c) if pre_sel_c in comps else 0
-        sel_comp = st.sidebar.selectbox("2. Competitie", comps, index=c_idx)
-    else:
-        st.warning("Geen competities."); st.stop()
-
-# --- STAP C: WEDSTRIJD ---
-if sel_season and sel_comp:
-    match_query = """
-        SELECT m.id, m."scheduledDate", m."iterationId", h.name as home, a.name as away
-        FROM public.matches m
-        JOIN public.squads h ON m."homeSquadId" = h.id
-        JOIN public.squads a ON m."awaySquadId" = a.id
-        WHERE m."iterationId" IN (SELECT id FROM public.iterations WHERE season = %s AND "competitionName" = %s)
-        AND m."scheduledDate" <= NOW()
-        ORDER BY m."scheduledDate" DESC
-    """
-    df_matches = run_query(match_query, params=(sel_season, sel_comp))
+    # 1. Seizoen
+    df_seasons = run_query("SELECT DISTINCT season FROM public.iterations ORDER BY season DESC")
+    if not df_seasons.empty:
+        seasons = df_seasons['season'].tolist()
+        pre_s = st.session_state.get('pre_season')
+        s_idx = seasons.index(pre_s) if pre_s in seasons else 0
+        sel_season = st.sidebar.selectbox("1. Seizoen", seasons, index=s_idx)
     
-    if not df_matches.empty:
-        match_opts = {f"{r['home']} vs {r['away']} ({r['scheduledDate'].strftime('%d-%m')})": r for _, r in df_matches.iterrows()}
-        options_list = list(match_opts.keys())
+    # 2. Competitie
+    if sel_season:
+        df_comps = run_query('SELECT DISTINCT "competitionName" FROM public.iterations WHERE season = %s ORDER BY "competitionName"', params=(sel_season,))
+        if not df_comps.empty:
+            comps = df_comps['competitionName'].tolist()
+            pre_c = st.session_state.get('pre_comp')
+            c_idx = comps.index(pre_c) if pre_c in comps else 0
+            sel_comp = st.sidebar.selectbox("2. Competitie", comps, index=c_idx)
+
+    # 3. Wedstrijd
+    if sel_season and sel_comp:
+        match_query = """
+            SELECT m.id, m."scheduledDate", m."iterationId", h.name as home, a.name as away
+            FROM public.matches m
+            JOIN public.squads h ON m."homeSquadId" = h.id
+            JOIN public.squads a ON m."awaySquadId" = a.id
+            WHERE m."iterationId" IN (SELECT id FROM public.iterations WHERE season = %s AND "competitionName" = %s)
+            AND m."scheduledDate" <= NOW()
+            ORDER BY m."scheduledDate" DESC
+        """
+        df_matches = run_query(match_query, params=(sel_season, sel_comp))
         
-        # Zoek index van de match uit de URL
-        if url_match_id:
-            for i, (label, row) in enumerate(match_opts.items()):
-                if str(row['id']) == str(url_match_id):
-                    default_match_idx = i
-                    break
-        
-        sel_match_label = st.sidebar.selectbox("3. Wedstrijd", options_list, index=default_match_idx)
-        sel_match_row = match_opts[sel_match_label]
-        
-        # CRUCIAAL: Zet de geselecteerde match in de URL
-        selected_match_id = str(sel_match_row['id'])
-        st.query_params["match_id"] = selected_match_id
-        
-        selected_comp_id = str(sel_match_row['iterationId'])
-        home_team_name = sel_match_row['home']
-        away_team_name = sel_match_row['away']
-    else:
-        st.info("Geen wedstrijden."); st.stop()
+        if not df_matches.empty:
+            match_opts = {f"{r['home']} vs {r['away']} ({r['scheduledDate'].strftime('%d-%m')})": r for _, r in df_matches.iterrows()}
+            options_list = list(match_opts.keys())
+            
+            # Zoek index voor URL match
+            default_idx = 0
+            if url_match_id:
+                for i, (label, row) in enumerate(match_opts.items()):
+                    if str(row['id']) == str(url_match_id):
+                        default_idx = i; break
+            
+            sel_match_label = st.sidebar.selectbox("3. Wedstrijd", options_list, index=default_idx)
+            sel_match_row = match_opts[sel_match_label]
+            selected_match_id = str(sel_match_row['id'])
+            selected_comp_id = str(sel_match_row['iterationId'])
+            home_team_name = sel_match_row['home']
+            away_team_name = sel_match_row['away']
+            
+            # Update URL
+            st.query_params["match_id"] = selected_match_id
+        else:
+            st.info("Geen wedstrijden."); st.stop()
 
 st.sidebar.divider()
-st.sidebar.write(f"👤 **Scout:** {current_scout_id}")
+st.sidebar.write(f"👤 **Scout:** {current_scout_name}")
 
 # -----------------------------------------------------------------------------
-# 3. SPELERS OPHALEN (Inclusief Rugnummers & Pin-Sorteer Logica)
+# 3. SPELERS OPHALEN
 # -----------------------------------------------------------------------------
 df_players = pd.DataFrame()
 players_list = []
 
+# A. Officiele Spelers (uit JSON)
 if selected_match_id:
-    # Haal officiële wedstrijdselecties op
-    query = 'SELECT "id", "squadHome", "squadAway" FROM public.match_details_full WHERE "id" = %s'
-    df_json = run_query(query, params=(selected_match_id,))
-    
+    df_json = run_query('SELECT "squadHome", "squadAway" FROM public.match_details_full WHERE "id" = %s', params=(selected_match_id,))
     if df_json is not None and not df_json.empty:
         for side in ['Home', 'Away']:
-            col_name = f'squad{side}'
-            raw_data = df_json.iloc[0][col_name]
-            
-            if isinstance(raw_data, str):
-                try: data = json.loads(raw_data)
-                except: data = {}
-            else: data = raw_data
-
-            if data and isinstance(data, dict) and 'players' in data:
+            raw_data = df_json.iloc[0][f'squad{side}']
+            data = json.loads(raw_data) if isinstance(raw_data, str) else raw_data
+            if data and 'players' in data:
                 for p in data['players']:
                     players_list.append({
                         'player_id': str(p.get('id')), 
-                        'shirt_number': p.get('shirtNumber', p.get('shirt_number', 0)), 
+                        'shirt_number': p.get('shirtNumber', 0), 
                         'side': side.lower(), 
                         'source': 'official',
-                        'commonname': p.get('name', p.get('commonname', None))
+                        'commonname': p.get('name', None)
                     })
 
-# Voeg spelers uit de scouting.rapporten toe (extra spelers)
+# B. Reeds gerapporteerde spelers (voorkomt NameError door initialisatie bovenaan)
 q_rep = """
     SELECT r.speler_id, r.custom_speler_naam, p.commonname 
     FROM scouting.rapporten r 
@@ -237,8 +238,7 @@ if df_rep is not None and not df_rep.empty:
     for _, r in df_rep.iterrows():
         pid = str(r['speler_id']) if r['speler_id'] else None
         pname = r['commonname'] if r['commonname'] else r['custom_speler_naam']
-        exists = any(p['player_id'] == pid for p in players_list if pid)
-        if not exists:
+        if not any(p['player_id'] == pid for p in players_list if pid):
             players_list.append({
                 'player_id': pid, 'shirt_number': 0, 'side': 'extra', 
                 'source': 'reported', 'commonname': pname
@@ -246,33 +246,18 @@ if df_rep is not None and not df_rep.empty:
 
 if players_list:
     df_players = pd.DataFrame(players_list)
+    # Vul namen aan vanuit DB indien nog leeg
+    miss_ids = df_players[df_players['commonname'].isna()]['player_id'].unique().tolist()
+    if miss_ids:
+        df_n = run_query("SELECT id, commonname FROM public.players WHERE id IN %s", (tuple(miss_ids),))
+        if df_n is not None:
+            name_map = dict(zip(df_n['id'].astype(str), df_n['commonname']))
+            df_players['commonname'] = df_players.apply(lambda x: name_map.get(x['player_id'], x['commonname']), axis=1)
     
-    # Namen aanvullen indien nodig
-    missing_mask = df_players['commonname'].isna() & df_players['player_id'].notna()
-    ids_to_fetch = df_players.loc[missing_mask, 'player_id'].unique().tolist()
-    if ids_to_fetch:
-        q_n = "SELECT id, commonname FROM public.players WHERE id IN %s"
-        df_n = run_query(q_n, params=(tuple(ids_to_fetch),))
-        if df_n is not None and not df_n.empty:
-            name_dict = dict(zip(df_n['id'].astype(str), df_n['commonname']))
-            df_players['commonname'] = df_players.apply(
-                lambda x: name_dict.get(x['player_id'], x['commonname']), axis=1
-            )
-    
-    df_players['commonname'] = df_players['commonname'].fillna("Onbekende Speler")
-    
-    # --- CRUCIALE PIN LOGICA ---
-    # 1. Bepaal per speler of hij in de 'watched_players' set zit
-    df_players['is_watched'] = df_players.apply(
-        lambda r: (str(r['player_id']) if r['player_id'] else r['commonname']) in st.session_state.watched_players, 
-        axis=1
-    )
-    # 2. Sorteer: Eerst gepind (is_watched), dan op team (side), dan op rugnummer (shirt_number)
-    df_players = df_players.sort_values(
-        by=['is_watched', 'side', 'shirt_number'], 
-        ascending=[False, True, True]
-    )
-
+    df_players['commonname'] = df_players['commonname'].fillna("Onbekend")
+    # PIN LOGICA & SORTERING
+    df_players['is_watched'] = df_players.apply(lambda r: (str(r['player_id']) if r['player_id'] else r['commonname']) in st.session_state.watched_players, axis=1)
+    df_players = df_players.sort_values(by=['is_watched', 'side', 'shirt_number'], ascending=[False, True, True])
 # -----------------------------------------------------------------------------
 # 4. UI: SPELERSLIJST (LINKS)
 # -----------------------------------------------------------------------------
