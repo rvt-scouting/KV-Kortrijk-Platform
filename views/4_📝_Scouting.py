@@ -473,5 +473,5 @@ with col_editor:
             "rapport_tekst": new_txt, "gouden_buzzer": new_gold, "shortlist_id": None, "speler_lengte": new_len, "contract_einde": new_con
         }
         if save_report_to_db(s_d):
-            st.success("Opgeslagen!"); st.balloons()
+            st.success("Opgeslagen!"); st.snow()
 
