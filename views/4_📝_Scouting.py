@@ -119,7 +119,7 @@ def sync_text_to_draft():
 # -----------------------------------------------------------------------------
 st.title("📝 Live Match Scouting")
 
-# Initialisatie variabelen
+# Initialisatie basis variabelen
 selected_match_id = None
 selected_comp_id = None
 custom_match_name = None
@@ -133,9 +133,9 @@ if is_manual_match:
     custom_match_name = st.sidebar.text_input("Naam Wedstrijd", placeholder="bv. KVK - Harelbeke")
     if not custom_match_name: 
         st.info("👈 Voer een naam in."); st.stop()
-    st.query_params.clear() # Wis URL bij manuele match
+    st.query_params.clear()
 else:
-    # 1. URL HERSTEL LOGICA (Alleen bij de allereerste keer laden)
+    # 1. URL RECOVERY (Alleen bij eerste keer laden van de sessie)
     url_match_id = st.query_params.get("match_id")
     
     if url_match_id and not st.session_state.get('url_processed'):
@@ -152,23 +152,23 @@ else:
             st.session_state.url_processed = True
 
     # --- DROPDOWNS ---
-    # Seizoen
+    # Seizoen selectie
     df_seasons = run_query("SELECT DISTINCT season FROM public.iterations ORDER BY season DESC")
-    seasons = df_seasons['season'].tolist() if not df_seasons.empty else []
+    seasons = df_seasons['season'].tolist() if (df_seasons is not None and not df_seasons.empty) else []
     pre_s = st.session_state.get('pre_season')
     s_idx = seasons.index(pre_s) if pre_s in seasons else 0
     sel_season = st.sidebar.selectbox("1. Seizoen", seasons, index=s_idx)
 
-    # Competitie
+    # Competitie selectie
     sel_comp = None
     if sel_season:
         df_comps = run_query('SELECT DISTINCT "competitionName" FROM public.iterations WHERE season = %s ORDER BY "competitionName"', params=(sel_season,))
-        comps = df_comps['competitionName'].tolist() if not df_comps.empty else []
+        comps = df_comps['competitionName'].tolist() if (df_comps is not None and not df_comps.empty) else []
         pre_c = st.session_state.get('pre_comp')
         c_idx = comps.index(pre_c) if pre_c in comps else 0
         sel_comp = st.sidebar.selectbox("2. Competitie", comps, index=c_idx)
 
-    # Wedstrijd
+    # Wedstrijd selectie
     if sel_season and sel_comp:
         match_query = """
             SELECT m.id, m."scheduledDate", m."iterationId", h.name as home, a.name as away
@@ -181,13 +181,17 @@ else:
         """
         df_matches = run_query(match_query, params=(sel_season, sel_comp))
         
-        if not df_matches.empty:
-            # Bouw de opties en bewaar ze in session_state voor de callback
-            match_opts = {f"{r['home']} vs {r['away']} ({r['scheduledDate'].strftime('%d-%m')})": r for _, r in df_matches.iterrows()}
+        if df_matches is not None and not df_matches.empty:
+            # We bouwen de dictionary voor de lookup
+            match_opts = {
+                f"{r['home']} vs {r['away']} ({r['scheduledDate'].strftime('%d-%m')})": r 
+                for _, r in df_matches.iterrows()
+            }
+            # Sla de opties op voor de callback functie bovenaan
             st.session_state.match_options_lookup = match_opts
             options_list = list(match_opts.keys())
             
-            # Bepaal de standaard index (op basis van URL of de eerste in de lijst)
+            # Zoek de juiste index op basis van de URL
             default_idx = 0
             if url_match_id:
                 for i, (label, row) in enumerate(match_opts.items()):
@@ -195,13 +199,13 @@ else:
                         default_idx = i
                         break
             
-            # DE SELECTBOX MET CALLBACK
+            # De dropdown die de URL bijwerkt
             sel_match_label = st.sidebar.selectbox(
                 "3. Wedstrijd", 
                 options_list, 
                 index=default_idx,
                 key="match_selector",
-                on_change=update_match_url # <--- DIT FORCEERT DE URL UPDATE
+                on_change=update_match_url
             )
             
             sel_match_row = match_opts[sel_match_label]
@@ -210,10 +214,10 @@ else:
             home_team_name = sel_match_row['home']
             away_team_name = sel_match_row['away']
             
-            # Zorg dat de URL ook bij de eerste keer laden klopt
+            # Altijd de URL synchroniseren met de huidige keuze
             st.query_params["match_id"] = selected_match_id
         else:
-            st.info("Geen wedstrijden."); st.stop()
+            st.info("Geen wedstrijden gevonden voor deze selectie."); st.stop()
 
 st.sidebar.divider()
 st.sidebar.write(f"👤 **Scout:** {current_scout_name}")
