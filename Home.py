@@ -107,7 +107,7 @@ else:
 
     elif lvl >= 3:
         # Niveau 3+: Volledige toegang
-        pages["🔍 Hoofd Analyse"] = [pg_kvk, pg_player_analysis, pg_team_analysis]
+        pages["Hoofd Analyse"] = [pg_kvk, pg_player_analysis, pg_team_analysis]
         
         pages["Scouting & Markt"] = [
             pg_dashboard, 
