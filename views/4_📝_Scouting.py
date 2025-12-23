@@ -231,29 +231,35 @@ st.sidebar.divider()
 st.sidebar.write(f"👤 **Scout:** {current_scout_name}")
 
 # -----------------------------------------------------------------------------
-# 3. SPELERS OPHALEN & PENDING LOGICA
+# 3. SPELERS OPHALEN (Gecorrigeerd voor Naam-Recovery & Extra Spelers)
 # -----------------------------------------------------------------------------
 df_players = pd.DataFrame()
 players_list = []
 
-# A. Officiele Spelers uit JSON
+# A. Officiele Spelers uit Match Details JSON
 if selected_match_id:
     df_json = run_query('SELECT "squadHome", "squadAway" FROM public.match_details_full WHERE "id" = %s', params=(selected_match_id,))
     if df_json is not None and not df_json.empty:
         for side in ['Home', 'Away']:
             raw_data = df_json.iloc[0][f'squad{side}']
+            # Verwerk JSON ongeacht of het als string of dict uit de DB komt
             data = json.loads(raw_data) if isinstance(raw_data, str) else raw_data
+            
             if data and isinstance(data, dict) and 'players' in data:
                 for p in data['players']:
-                    players_list.append({
-                        'player_id': str(p.get('id')), 
-                        'shirt_number': p.get('shirtNumber', 0), 
-                        'side': side.lower(), 
-                        'source': 'official',
-                        'commonname': p.get('name', None)
-                    })
+                    p_id = p.get('id')
+                    if p_id:
+                        # Probeer verschillende mogelijke naam-velden uit de JSON
+                        p_name = p.get('name') or p.get('shortName') or p.get('commonName') or p.get('commonname')
+                        players_list.append({
+                            'player_id': str(p_id), 
+                            'shirt_number': p.get('shirtNumber', p.get('shirt_number', 0)), 
+                            'side': side.lower(), 
+                            'source': 'official',
+                            'commonname': p_name # Kan None zijn, herstellen we in stap D
+                        })
 
-# B. Reeds gerapporteerde spelers (Extra spelers in DB) 
+# B. Reeds gerapporteerde spelers uit de database (Extra spelers)
 q_rep = """
     SELECT r.speler_id, r.custom_speler_naam, p.commonname 
     FROM scouting.rapporten r 
@@ -267,7 +273,7 @@ if df_rep is not None and not df_rep.empty:
         pid = str(r['speler_id']) if r['speler_id'] else None
         pname = r['commonname'] if r['commonname'] else r['custom_speler_naam']
         
-        # Voorkom dubbelen
+        # Voorkom dubbelen in de lijst
         exists = any(p['player_id'] == pid for p in players_list if pid) or \
                  any(p['commonname'] == pname for p in players_list if not pid)
         
@@ -277,23 +283,14 @@ if df_rep is not None and not df_rep.empty:
                 'source': 'reported', 'commonname': pname
             })
 
-# C. DE FIX: PENDING DATABASE PLAYER INJECTIE
-# Als er een speler is geselecteerd die nog niet in de lijsten hierboven staat
+# C. LIVE INJECTIE: Speler die via de zoekfunctie is gekozen of wordt getypt
 a_pid = st.session_state.active_player_id
-if a_pid and not any(p['player_id'] == a_pid for p in players_list):
-    # Haal even snel de naam op voor de lijst
-    res_name = run_query("SELECT commonname FROM public.players WHERE id = %s", (a_pid,))
-    p_name_db = res_name.iloc[0]['commonname'] if not res_name.empty else "Laden..."
-    
+if a_pid and not any(p['player_id'] == str(a_pid) for p in players_list):
     players_list.append({
-        'player_id': a_pid, 
-        'shirt_number': 0, 
-        'side': 'extra', 
-        'source': 'pending_db', 
-        'commonname': p_name_db
+        'player_id': str(a_pid), 'shirt_number': 0, 'side': 'extra', 
+        'source': 'pending_db', 'commonname': None # Wordt in stap D opgehaald
     })
 
-# D. LIVE INJECTIE: Vrije tekst speler
 if st.session_state.manual_player_mode and st.session_state.manual_player_name_text:
     m_name = st.session_state.manual_player_name_text
     if not any(p['commonname'] == m_name for p in players_list):
@@ -302,10 +299,27 @@ if st.session_state.manual_player_mode and st.session_state.manual_player_name_t
             'source': 'draft', 'commonname': m_name
         })
 
+# D. NAAM HERSTEL & SORTERING
 if players_list:
     df_players = pd.DataFrame(players_list)
-    # Sortering en Pinning logica 
-    df_players['is_watched'] = df_players.apply(lambda r: (str(r['player_id']) if r['player_id'] else r['commonname']) in st.session_state.watched_players, axis=1)
+    
+    # Als namen ontbreken, haal ze in één keer op uit public.players
+    mask_missing = (df_players['commonname'].isna() | (df_players['commonname'] == "")) & df_players['player_id'].notna()
+    ids_to_fetch = df_players.loc[mask_missing, 'player_id'].unique().tolist()
+    
+    if ids_to_fetch:
+        df_n = run_query("SELECT id, commonname FROM public.players WHERE id IN %s", (tuple(ids_to_fetch),))
+        if df_n is not None and not df_n.empty:
+            name_map = dict(zip(df_n['id'].astype(str), df_n['commonname']))
+            df_players.loc[mask_missing, 'commonname'] = df_players.loc[mask_missing, 'player_id'].map(name_map)
+    
+    df_players['commonname'] = df_players['commonname'].fillna("Onbekende Speler")
+    
+    # Pinning logica & Sortering
+    df_players['is_watched'] = df_players.apply(
+        lambda r: (str(r['player_id']) if r['player_id'] else r['commonname']) in st.session_state.watched_players, 
+        axis=1
+    )
     df_players = df_players.sort_values(by=['is_watched', 'side', 'shirt_number'], ascending=[False, True, True])
 
 # -----------------------------------------------------------------------------
@@ -316,7 +330,7 @@ col_list, col_editor = st.columns([1, 2])
 with col_list:
     st.subheader("Selecties")
     
-    # We verspringen automatisch naar 'Extra' als we een pending speler hebben of in manual mode zijn
+    # Automatisch naar tabblad 'Extra' springen bij manuele mode of database-zoekopdracht
     has_extra = not df_players.empty and not df_players[df_players['side'] == 'extra'].empty
     default_tab = 2 if (st.session_state.manual_player_mode or a_pid) and has_extra else 0
     
@@ -326,31 +340,42 @@ with col_list:
     
     if not df_players.empty:
         filtered = df_players[df_players['side'] == side_f]
+        if filtered.empty:
+            st.info(f"Geen spelers gevonden.")
+        
         for _, row in filtered.iterrows():
             p_id, p_name = row['player_id'], row['commonname']
+            p_nr = int(row['shirt_number']) if row['shirt_number'] != 0 else "?"
             p_key = p_id if p_id else p_name
             d_key = f"{selected_match_id if selected_match_id else custom_match_name}_{p_key}_{current_scout_id}"
             
             c_pin, c_btn = st.columns([0.15, 0.85])
             with c_pin:
-                st.checkbox("📌", value=row['is_watched'], key=f"p_{p_key}_{side_f}", label_visibility="collapsed")
+                is_p = st.checkbox("📌", value=row['is_watched'], key=f"p_{p_key}_{side_f}", label_visibility="collapsed")
+                if is_p != row['is_watched']:
+                    if is_p: st.session_state.watched_players.add(p_key)
+                    else: st.session_state.watched_players.discard(p_key)
+                    st.rerun()
             with c_btn:
-                # Bepaal icoon op basis van status
-                if d_key in st.session_state.scout_drafts: icon = "✅" # Reeds in bewerking
-                elif row['source'] == 'pending_db': icon = "🔍" # Vers uit de database zoekfunctie
-                elif row['source'] == 'reported': icon = "📥" # Al eerder opgeslagen voor deze match
-                elif row['source'] == 'draft': icon = "✍️" # Handmatig getypt
+                # Icoon status bepalen
+                if d_key in st.session_state.scout_drafts: icon = "✅" 
+                elif row['source'] == 'pending_db': icon = "🔍" 
+                elif row['source'] == 'reported': icon = "📥" 
+                elif row['source'] == 'draft': icon = "✍️" 
                 else: icon = "👤"
                 
                 style = "primary" if st.session_state.active_player_id == p_id and p_id else "secondary"
-                if st.button(f"{icon} {p_name}", key=f"b_{p_key}", type=style, use_container_width=True):
+                # Knop met rugnummer en herstelde naam
+                if st.button(f"{icon} #{p_nr} {p_name}", key=f"b_{p_key}", type=style, use_container_width=True):
                     st.session_state.active_player_id = p_id
                     st.session_state.manual_player_mode = (p_id is None)
+                    if not p_id: st.session_state.manual_player_name_text = p_name
                     st.rerun()
     
     st.divider()
     if st.button("➕ Zoeken / Manueel Toevoegen", use_container_width=True):
-        st.session_state.manual_player_mode = True; st.session_state.active_player_id = None
+        st.session_state.manual_player_mode = True
+        st.session_state.active_player_id = None
         st.rerun()
 
     if st.session_state.manual_player_mode:
