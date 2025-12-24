@@ -342,12 +342,25 @@ with col_list:
         filtered = df_players[df_players['side'] == side_f]
         if filtered.empty:
             st.info(f"Geen spelers gevonden.")
-        
         for _, row in filtered.iterrows():
             p_id, p_name = row['player_id'], row['commonname']
-            p_nr = int(row['shirt_number']) if row['shirt_number'] != 0 else "?"
+            
+            # --- VEILIGE RUGNUMMER CONTROLE ---
+            raw_nr = row.get('shirt_number')
+            # We checken: is het niet leeg (NaN/None), is het geen lege tekst, en is het niet 0?
+            if pd.notnull(raw_nr) and str(raw_nr).strip() not in ["", "0", "0.0"]:
+                try:
+                    # Eerst naar float (voor 10.0) en dan naar int (voor 10)
+                    p_nr = int(float(raw_nr))
+                except (ValueError, TypeError):
+                    p_nr = "?"
+            else:
+                p_nr = "?"
+            # ----------------------------------
+
             p_key = p_id if p_id else p_name
             d_key = f"{selected_match_id if selected_match_id else custom_match_name}_{p_key}_{current_scout_id}"
+
             
             c_pin, c_btn = st.columns([0.15, 0.85])
             with c_pin:
