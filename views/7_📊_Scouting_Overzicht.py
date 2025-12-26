@@ -20,9 +20,9 @@ except:
 st.title("📊 Scouting Dashboard")
 
 # -----------------------------------------------------------------------------
-# 1. FILTERS (SIDEBAR)
+# 1. FILTERS (SIDEBAR) - Algemene filters
 # -----------------------------------------------------------------------------
-st.sidebar.header("🔍 Filters Rapporten")
+st.sidebar.header("🔍 Algemene Filters")
 
 # Filter: Datum
 date_range = st.sidebar.date_input("Datum Periode", [])
@@ -39,12 +39,11 @@ if lvl > 1:
 else:
     st.sidebar.info(f"👤 Je ziet alleen je eigen rapporten.")
 
-# Filter: Advies Opties (ook nodig voor het bewerk-formulier)
+# Filter: Advies Opties
 advies_opts = ["Sign", "Future Sign", "Interesting", "Follow", "No", "A", "A+", "B", "C"]
 try:
     df_advies_db = run_query("SELECT DISTINCT advies FROM scouting.rapporten WHERE advies IS NOT NULL ORDER BY advies")
     if not df_advies_db.empty:
-        # Combineer hardcoded opties met wat in DB staat om niks te missen
         db_list = df_advies_db['advies'].tolist()
         advies_opts = list(set(advies_opts + db_list))
 except:
@@ -81,7 +80,7 @@ with tab_reports:
             st.cache_data.clear()
             st.rerun()
     
-    # Query om alle data op te halen (inclusief IDs voor bewerken)
+    # Query om alle data op te halen
     query = """
         SELECT 
             r.id,
@@ -108,7 +107,7 @@ with tab_reports:
         df_reports = run_query(query)
         
         if not df_reports.empty:
-            # --- PYTHON SIDE FILTERING ---
+            # --- 1. SIDEBAR FILTERS TOEPASSEN (Pandas) ---
             if lvl == 1:
                 df_reports = df_reports[df_reports['scout_id'] == current_user_id]
             elif selected_scouts:
@@ -126,8 +125,20 @@ with tab_reports:
                 df_reports['Datum'] = pd.to_datetime(df_reports['Datum'])
                 df_reports = df_reports[(df_reports['Datum'].dt.date >= start_date) & (df_reports['Datum'].dt.date <= end_date)]
 
-            # --- TABEL WEERGAVE ---
-            st.info("💡 Klik op een rij om details te zien of het rapport aan te passen.")
+            # --- 2. NIEUWE SPECIFIEKE FILTER: SPELER (Bovenaan Tab) ---
+            st.markdown("---")
+            available_players = sorted(df_reports['Speler'].unique().tolist())
+            selected_players = st.multiselect(
+                "🔍 Zoek specifieke speler(s) in de resultaten", 
+                options=available_players,
+                placeholder="Typ een naam..."
+            )
+            
+            if selected_players:
+                df_reports = df_reports[df_reports['Speler'].isin(selected_players)]
+
+            # --- 3. TABEL WEERGAVE ---
+            st.info(f"Resultaten: {len(df_reports)} rapporten gevonden. Klik op een rij voor details.")
             
             event = st.dataframe(
                 df_reports,
@@ -149,13 +160,10 @@ with tab_reports:
                 selected_idx = event.selection.rows[0]
                 row = df_reports.iloc[selected_idx]
                 
-                # Check eigenaarschap
                 is_owner = (int(row['scout_id']) == int(current_user_id))
                 can_edit = is_owner or lvl >= 3
 
                 st.divider()
-                
-                # Header met Toggle voor Edit-modus
                 h_col1, h_col2 = st.columns([5, 1])
                 with h_col1:
                     st.subheader(f"📄 Rapport: {row['Speler']}")
@@ -163,17 +171,15 @@ with tab_reports:
                 edit_mode = False
                 if can_edit:
                     with h_col2:
-                        edit_mode = st.toggle("📝 Bewerken", help="Pas dit rapport aan")
+                        edit_mode = st.toggle("📝 Bewerken")
 
                 if edit_mode:
-                    # FORMULIER OM DATA AAN TE PASSEN
                     with st.form("edit_form"):
                         st.warning("Let op: Je overschrijft de bestaande gegevens.")
                         c1, c2, c3 = st.columns(3)
                         new_pos = c1.text_input("Positie", value=row['Positie'])
                         new_rating = c2.slider("Rating", 1, 10, int(row['Rating']))
                         new_advies = c3.selectbox("Advies", advies_opts, index=advies_opts.index(row['Advies']) if row['Advies'] in advies_opts else 0)
-                        
                         new_text = st.text_area("Rapport Tekst", value=row['Rapport'], height=200)
                         new_gold = st.checkbox("🏆 Gouden Buzzer", value=bool(row['Gold']))
                         
@@ -188,7 +194,6 @@ with tab_reports:
                                 st.cache_data.clear()
                                 st.rerun()
                 else:
-                    # NORMALE WEERGAVE (Lees-modus)
                     with st.container(border=True):
                         c1, c2, c3, c4 = st.columns(4)
                         c1.markdown(f"**Scout:** {row['Scout']}")
@@ -203,6 +208,7 @@ with tab_reports:
             st.info("Geen rapporten gevonden.")
     except Exception as e:
         st.error(f"Fout bij laden: {e}")
+
 
 # =============================================================================
 # TAB 2: SHORTLISTS (ORIGINELE LOGICA)
