@@ -65,11 +65,12 @@ players_query = """
         p.id as "playerId", 
         sq.name as "squadName"
     FROM public.players p
-    -- We casten p.id naar text om te matchen met s."playerId"
-    JOIN analysis.final_impect_scores s ON CAST(p.id AS TEXT) = s."playerId"
-    -- We matchen squadId's
-    LEFT JOIN public.squads sq ON CAST(s."squadId" AS TEXT) = CAST(sq.id AS TEXT)
-    -- We casten de parameter naar text om type-mismatches te voorkomen
+    -- We dwingen beide kanten van de JOIN naar TEXT
+    JOIN analysis.final_impect_scores s 
+        ON CAST(p.id AS TEXT) = CAST(s."playerId" AS TEXT)
+    LEFT JOIN public.squads sq 
+        ON CAST(s."squadId" AS TEXT) = CAST(sq.id AS TEXT)
+    -- We dwingen de filter parameter ook naar TEXT
     WHERE CAST(s."iterationId" AS TEXT) = CAST(%s AS TEXT)
     ORDER BY p.commonname;
 """
