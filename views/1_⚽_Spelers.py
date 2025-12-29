@@ -58,39 +58,31 @@ st.title("🏃‍♂️ Speler Analyse")
 # A. SPELER SELECTIE
 st.sidebar.divider()
 st.sidebar.header("2. Speler Zoeken")
+
 players_query = """
-    SELECT p.commonname, p.id as "playerId", sq.name as "squadName"
+    SELECT 
+        p.commonname, 
+        p.id as "playerId", 
+        sq.name as "squadName"
     FROM public.players p
+    -- We casten p.id naar text om te matchen met s."playerId"
     JOIN analysis.final_impect_scores s ON CAST(p.id AS TEXT) = s."playerId"
-    LEFT JOIN public.squads sq ON CAST(s. "squadId" AS TEXT) = CAST(sq.id AS TEXT)
-    WHERE s."iterationId" = %s
+    -- We matchen squadId's
+    LEFT JOIN public.squads sq ON CAST(s."squadId" AS TEXT) = CAST(sq.id AS TEXT)
+    -- We casten de parameter naar text om type-mismatches te voorkomen
+    WHERE CAST(s."iterationId" AS TEXT) = CAST(%s AS TEXT)
     ORDER BY p.commonname;
 """
+
 try:
-    df_players = run_query(players_query, params=(selected_iteration_id,))
+    # Zorg dat we het ID als string doorgeven voor de zekerheid
+    df_players = run_query(players_query, params=(str(selected_iteration_id),))
+    
     if df_players.empty:
-        st.warning("Geen spelers gevonden in deze competitie."); st.stop()
+        st.warning(f"Geen spelers gevonden voor iteration ID: {selected_iteration_id}")
+        st.stop()
         
     unique_names = df_players['commonname'].unique().tolist()
-    
-    idx_p = 0
-    if "sb_player" in st.session_state and st.session_state.sb_player in unique_names:
-        idx_p = unique_names.index(st.session_state.sb_player)
-        
-    selected_player_name = st.sidebar.selectbox("Kies een speler:", unique_names, index=idx_p, key="sb_player")
-    
-    candidate_rows = df_players[df_players['commonname'] == selected_player_name]
-    final_player_id = None
-    
-    if len(candidate_rows) > 1:
-        st.sidebar.warning(f"⚠️ Meerdere spelers: '{selected_player_name}'.")
-        squad_options = [s for s in candidate_rows['squadName'].tolist() if s is not None]
-        selected_squad = st.sidebar.selectbox("Kies team:", squad_options)
-        final_player_id = candidate_rows[candidate_rows['squadName'] == selected_squad].iloc[0]['playerId']
-    elif len(candidate_rows) == 1: 
-        final_player_id = candidate_rows.iloc[0]['playerId']
-    else: st.error("Selectie fout."); st.stop()
-except Exception as e: st.error("Fout bij ophalen spelers."); st.code(e); st.stop()
 
 # B. CHECK TRANSFER STATUS
 check_offer_q = """
