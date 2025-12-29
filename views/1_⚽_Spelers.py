@@ -65,25 +65,43 @@ players_query = """
         p.id as "playerId", 
         sq.name as "squadName"
     FROM public.players p
-    -- We dwingen beide kanten van de JOIN naar TEXT
     JOIN analysis.final_impect_scores s 
         ON CAST(p.id AS TEXT) = CAST(s."playerId" AS TEXT)
     LEFT JOIN public.squads sq 
         ON CAST(s."squadId" AS TEXT) = CAST(sq.id AS TEXT)
-    -- We dwingen de filter parameter ook naar TEXT
     WHERE CAST(s."iterationId" AS TEXT) = CAST(%s AS TEXT)
     ORDER BY p.commonname;
 """
 
 try:
-    # Zorg dat we het ID als string doorgeven voor de zekerheid
     df_players = run_query(players_query, params=(str(selected_iteration_id),))
     
     if df_players.empty:
-        st.warning(f"Geen spelers gevonden voor iteration ID: {selected_iteration_id}")
+        st.warning(f"Geen spelers gevonden in deze competitie.")
         st.stop()
         
     unique_names = df_players['commonname'].unique().tolist()
+
+    # --- DEZE REGELS ONTBRAKEN EN VEROORZAAKTEN DE FOUT ---
+    idx_p = 0
+    if "sb_player" in st.session_state and st.session_state.sb_player in unique_names:
+        idx_p = unique_names.index(st.session_state.sb_player)
+    
+    selected_player_name = st.sidebar.selectbox("Kies een speler:", unique_names, index=idx_p, key="sb_player")
+    
+    candidate_rows = df_players[df_players['commonname'] == selected_player_name]
+    
+    if len(candidate_rows) > 1:
+        st.sidebar.warning(f"⚠️ Meerdere spelers: '{selected_player_name}'.")
+        squad_options = [s for s in candidate_rows['squadName'].tolist() if s is not None]
+        selected_squad = st.sidebar.selectbox("Kies team:", squad_options)
+        final_player_id = candidate_rows[candidate_rows['squadName'] == selected_squad].iloc[0]['playerId']
+    else:
+        final_player_id = candidate_rows.iloc[0]['playerId']
+
+except Exception as e:
+    st.error(f"Fout bij ophalen spelers: {e}")
+    st.stop()
 
 # B. CHECK TRANSFER STATUS
 check_offer_q = """
