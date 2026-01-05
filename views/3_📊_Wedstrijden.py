@@ -448,6 +448,7 @@ with tab3:
         if sel_plys: df_m = df_m[df_m['Speler'].isin(sel_plys)]
         
         if not df_m.empty:
+            # --- 1. DE SCATTER MAP ---
             fig = go.Figure()
             # Veld
             fig.add_shape(type="rect", x0=-52.5, y0=-34, x1=52.5, y1=34, line=dict(color="white"), fillcolor="#4CAF50", layer="below")
@@ -505,25 +506,63 @@ with tab3:
                 plot_bgcolor='rgba(0,0,0,0)', margin=dict(l=0, r=0, t=20, b=0)
             )
             st.plotly_chart(fig, use_container_width=True)
+            
+            # --- 2. DE SPIDER DIAGRAM ---
+            st.divider()
+            st.subheader("🕸️ Spider Diagram: Team Vergelijking")
+            if len(sel_acts) > 0:
+                radar_agg = df_m.groupby(['Team', 'action_clean']).size().reset_index(name='Count')
+                fig_rad = go.Figure()
+                for t in sel_teams:
+                    vals = []
+                    for a in sel_acts:
+                        row = radar_agg[(radar_agg['Team'] == t) & (radar_agg['action_clean'] == a)]
+                        vals.append(row['Count'].values[0] if not row.empty else 0)
+                    if vals:
+                        vals_plot = vals + [vals[0]]
+                        thetas_plot = sel_acts + [sel_acts[0]]
+                        fig_rad.add_trace(go.Scatterpolar(r=vals_plot, theta=thetas_plot, fill='toself', name=t, line_color=team_colors.get(t, '#95a5a6')))
+                fig_rad.update_layout(polar=dict(radialaxis=dict(visible=True)), showlegend=True, height=500)
+                st.plotly_chart(fig_rad, use_container_width=True)
+
+            # --- 3. DE NIEUWE HEATMAP ---
+            st.divider()
+            st.subheader("🔥 Actie Heatmap")
+            st.caption("Dichtheid van de geselecteerde acties")
+            
+            fig_hm = go.Figure()
+            # Veld (Hetzelfde als hierboven)
+            fig_hm.add_shape(type="rect", x0=-52.5, y0=-34, x1=52.5, y1=34, line=dict(color="white"), fillcolor="#4CAF50", layer="below")
+            fig_hm.add_shape(type="line", x0=0, y0=-34, x1=0, y1=34, line=dict(color="white"))
+            fig_hm.add_shape(type="circle", x0=-9.15, y0=-9.15, x1=9.15, y1=9.15, line=dict(color="white"))
+            fig_hm.add_shape(type="rect", x0=-52.5, y0=-20.16, x1=-36, y1=20.16, line=dict(color="white"))
+            fig_hm.add_shape(type="rect", x0=-52.5, y0=-9.16, x1=-46.5, y1=9.16, line=dict(color="white"))
+            fig_hm.add_shape(type="rect", x0=36, y0=-20.16, x1=52.5, y1=20.16, line=dict(color="white"))
+            fig_hm.add_shape(type="rect", x0=46.5, y0=-9.16, x1=52.5, y1=9.16, line=dict(color="white"))
+
+            # Heatmap layer
+            fig_hm.add_trace(go.Histogram2dContour(
+                x=df_m['x_start'],
+                y=df_m['y_start'],
+                colorscale='Hot',
+                reversescale=True,
+                xaxis='x',
+                yaxis='y',
+                ncontours=15,
+                showscale=False,
+                opacity=0.7
+            ))
+
+            fig_hm.update_layout(
+                width=800, height=550, 
+                xaxis=dict(visible=False, range=[-55, 55]), 
+                yaxis=dict(visible=False, range=[-36, 36], scaleanchor="x", scaleratio=1),
+                plot_bgcolor='rgba(0,0,0,0)', margin=dict(l=0, r=0, t=20, b=0)
+            )
+            st.plotly_chart(fig_hm, use_container_width=True)
+
         else:
             st.info("Geen events met deze filters.")
-
-        st.divider()
-        st.subheader("🕸️ Spider Diagram: Team Vergelijking")
-        if not df_m.empty and len(sel_acts) > 0:
-            radar_agg = df_m.groupby(['Team', 'action_clean']).size().reset_index(name='Count')
-            fig_rad = go.Figure()
-            for t in sel_teams:
-                vals = []
-                for a in sel_acts:
-                    row = radar_agg[(radar_agg['Team'] == t) & (radar_agg['action_clean'] == a)]
-                    vals.append(row['Count'].values[0] if not row.empty else 0)
-                if vals:
-                    vals_plot = vals + [vals[0]]
-                    thetas_plot = sel_acts + [sel_acts[0]]
-                    fig_rad.add_trace(go.Scatterpolar(r=vals_plot, theta=thetas_plot, fill='toself', name=t, line_color=team_colors.get(t, '#95a5a6')))
-            fig_rad.update_layout(polar=dict(radialaxis=dict(visible=True)), showlegend=True, height=500)
-            st.plotly_chart(fig_rad, use_container_width=True)
 
 # --- TAB 4: SPELERS xT ---
 with tab4:
