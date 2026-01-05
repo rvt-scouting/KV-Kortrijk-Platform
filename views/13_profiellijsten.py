@@ -120,3 +120,4 @@ def show_shortlists_page():
             st.warning(f"Geen spelers gevonden voor {selected_profile_name} met score > {min_score}.")
     else:
         st.info("Selecteer links een seizoen.")
+show_shortlists_page()
