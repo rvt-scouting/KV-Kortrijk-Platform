@@ -117,7 +117,7 @@ else:
             pg_intelligence, # Het strategisch dossier
             pg_offer, 
             pg_disc,
-            pf_profl
+            pg_profl
         ]
         
         pages["Performance Data"] = [pg_match, pg_coach]
