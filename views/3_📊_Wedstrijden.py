@@ -562,7 +562,7 @@ with tab3:
             fig_hm.add_shape(type="rect", x0=36, y0=-20.16, x1=52.5, y1=20.16, line=dict(color="white"))
             fig_hm.add_shape(type="rect", x0=46.5, y0=-9.16, x1=52.5, y1=9.16, line=dict(color="white"))
 
-            # Heatmap layer
+# Heatmap layer
             fig_hm.add_trace(go.Histogram2dContour(
                 x=df_m['x_start'],
                 y=df_m['y_start'],
@@ -572,13 +572,20 @@ with tab3:
                 yaxis='y',
                 ncontours=15,
                 showscale=False,
-                opacity=0.7
+                opacity=0.7,
+                # BELANGRIJK: Forceer de bins om te matchen met het veld (-52.5 tot 52.5)
+                autobinx=False,
+                xbins=dict(start=-52.5, end=52.5, size=5), # Bins van 5 meter breed
+                autobiny=False,
+                ybins=dict(start=-34, end=34, size=5),
+                zsmooth='best' # Maakt het mooi vaag in plaats van blokkig
             ))
-
+            
+            # Forceer de range van de plot zodat de heatmap niet 'uitzoomt'
             fig_hm.update_layout(
                 width=800, height=550, 
-                xaxis=dict(visible=False, range=[-55, 55]), 
-                yaxis=dict(visible=False, range=[-36, 36], scaleanchor="x", scaleratio=1),
+                xaxis=dict(visible=False, range=[-55, 55], fixedrange=True), # Iets breder dan het veld
+                yaxis=dict(visible=False, range=[-36, 36], scaleanchor="x", scaleratio=1, fixedrange=True),
                 plot_bgcolor='rgba(0,0,0,0)', margin=dict(l=0, r=0, t=20, b=0)
             )
             st.plotly_chart(fig_hm, use_container_width=True)
