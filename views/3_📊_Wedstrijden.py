@@ -261,6 +261,28 @@ df_events['squadId_clean'] = df_events['squadId'].apply(normalize_id)
 df_events['xT_Team_Raw'] = df_events['xT_Team_Raw'].fillna(0)
 df_events['xT_Opp_Raw'] = df_events['xT_Opp_Raw'].fillna(0)
 
+if not df_events.empty:
+    max_x = df_events['x_start'].max()
+    min_x = df_events['x_start'].min()
+    
+    # Als de data groter is dan 55 (dus waarschijnlijk 100 of 105) 
+    # EN er zijn geen negatieve waardes (dus 0 is de start), dan moeten we shiften.
+    if max_x > 55 and min_x >= 0:
+        # Aanname: Bron is 0-100 of 0-105. We schalen naar 105x68 meters.
+        # Factor berekenen (is de data 0-100 of 0-1 ?)
+        scale_x = 105.0 / 100.0 if max_x <= 100 else 1.0 # Als max rond 100 is, schaal iets op naar 105m
+        scale_y = 68.0 / 100.0 if df_events['y_start'].max() <= 100 else 1.0
+
+        # Formule: (Waarde - 50%) * Schaal
+        # Dit zet 0 om naar -52.5 en 100 om naar +52.5
+        # Let op: Soms moet Y omgedraaid worden (100-y), check dit in de app!
+        df_events['x_start'] = (df_events['x_start'] - 50) * (105/100)
+        df_events['y_start'] = (df_events['y_start'] - 50) * (68/100) # Pas aan naar (68/100) * -1 als het ondersteboven is
+        
+        # Doe hetzelfde voor end coordinates
+        df_events['x_end'] = (df_events['x_end'] - 50) * (105/100)
+        df_events['y_end'] = (df_events['y_end'] - 50) * (68/100)
+
 def calc_home_threat(row):
     if row['squadId_clean'] == home_id_str:
         return row['xT_Team_Raw'] - row['xT_Opp_Raw']
