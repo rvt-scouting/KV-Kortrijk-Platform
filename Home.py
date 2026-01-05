@@ -5,7 +5,7 @@ from utils import check_login
 # 1. SETUP
 # -----------------------------------------------------------------------------
 st.set_page_config(
-    page_title="KVK Platform", 
+    page_title="KV Kortrijk Platform", 
     page_icon="🔴", 
     layout="wide",
     initial_sidebar_state="expanded" 
