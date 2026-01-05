@@ -145,7 +145,7 @@ try:
                         sim = (100 - diff).sort_values(ascending=False)
                         sim = sim[sim.index != curr_idx]
                         
-                        top5 = sim.head(5).reset_index(); top5.columns = ['ID', 'Team', 'Seizoen', 'Competitie', 'Gelijkenis %']
+                        top5 = sim.head(15).reset_index(); top5.columns = ['ID', 'Team', 'Seizoen', 'Competitie', 'Gelijkenis %']
                         def c_sim(v): 
                             c = '#2ecc71' if v > 90 else '#27ae60' if v > 80 else 'black'
                             return f'color: {c}; font-weight: {"bold" if v > 80 else "normal"}'
