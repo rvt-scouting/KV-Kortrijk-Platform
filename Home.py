@@ -67,6 +67,7 @@ pg_shortlists = st.Page("views/9_🎯_Shortlists.py", title="Shortlists Manager"
 pg_dashboard = st.Page("views/7_📊_Scouting_Overzicht.py", title="Scouting Dashboard", icon="📈")
 pg_offer = st.Page("views/6_📥_Aangeboden.py", title="Transfermarkt (Aangeboden)", icon="📥")
 pg_disc = st.Page("views/5_🔎_Discover.py", title="Data Discover", icon="🔎")
+pg_profl = st.Page("views/13_profiellijsten.py", title="Profiellijsten", icon="🔎")
 
 # D. NIEUW: Intelligence (Dossiers)
 pg_intelligence = st.Page("views/12_🧠_Intelligence.py", title="Speler Dossier", icon="🧠")
@@ -115,7 +116,8 @@ else:
             pg_shortlists, 
             pg_intelligence, # Het strategisch dossier
             pg_offer, 
-            pg_disc
+            pg_disc,
+            pf_profl
         ]
         
         pages["Performance Data"] = [pg_match, pg_coach]
