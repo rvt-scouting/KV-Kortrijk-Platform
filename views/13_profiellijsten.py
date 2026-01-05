@@ -16,7 +16,8 @@ def get_dynamic_profiles():
           AND table_name = 'final_impect_scores' 
           AND column_name LIKE '%_kvk_score';
     """
-    df_cols = run_query(query, suppress_error=True)
+    # LET OP: suppress_error is weggehaald
+    df_cols = run_query(query)
     
     profiles = {}
     if not df_cols.empty:
@@ -29,7 +30,8 @@ def get_dynamic_profiles():
 def get_seasons():
     """Haalt unieke seizoenen op uit de iterations tabel."""
     query = "SELECT DISTINCT season FROM public.iterations ORDER BY season DESC;"
-    df = run_query(query, suppress_error=True)
+    # LET OP: suppress_error is weggehaald
+    df = run_query(query)
     if not df.empty:
         return df['season'].tolist()
     return []
@@ -37,9 +39,10 @@ def get_seasons():
 def get_iteration_ids_for_season(season):
     """Haalt alle iterationID's op die bij een specifiek seizoen horen."""
     query = "SELECT id FROM public.iterations WHERE season = %s"
-    df = run_query(query, params=(season,), suppress_error=True)
+    # LET OP: suppress_error is weggehaald
+    df = run_query(query, params=(season,))
     if not df.empty:
-        return df['id'].tolist() # Geeft bijv [155, 156, 160] terug
+        return df['id'].tolist() 
     return []
 
 # -------------------------------------------------------------------------
@@ -57,21 +60,26 @@ def show_shortlists_page():
         st.error("Kan geen profielen laden. Check database connectie.")
         return
 
-    # 2. FILTERS (Bovenaan de pagina, in 2 rijen)
+    # 2. FILTERS (Bovenaan de pagina)
     
-    # Rij 1: Het Seizoen (De 'Hoofd' filter)
-    col_season, _ = st.columns([1, 3]) # Kleine kolom voor seizoen, rest leeg
+    # Rij 1: Het Seizoen
+    col_season, _ = st.columns([1, 3]) 
     with col_season:
         selected_season = st.selectbox("Kies Seizoen", seasons_list)
 
-    st.markdown("---") # Lijntje voor scheiding
+    st.markdown("---") 
 
     # Rij 2: De specifieke criteria
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        selected_profile_name = st.selectbox("Selecteer Profiel", list(profiles_dict.keys()))
-        selected_db_column = profiles_dict[selected_profile_name]
+        # Check of de dictionary niet leeg is voor we keys opvragen
+        if profiles_dict:
+            selected_profile_name = st.selectbox("Selecteer Profiel", list(profiles_dict.keys()))
+            selected_db_column = profiles_dict[selected_profile_name]
+        else:
+            st.warning("Geen profielen gevonden.")
+            selected_db_column = None
         
     with col2:
         max_age = st.slider("Maximale Leeftijd", 15, 38, 24)
@@ -80,20 +88,18 @@ def show_shortlists_page():
         min_score = st.number_input("Minimale Score", 0, 100, 60)
 
     # 3. DATA OPHALEN
-    if selected_season:
-        # Stap A: Haal alle ID's op die bij dit seizoen horen (alle competities)
+    if selected_season and selected_db_column:
+        # Stap A: Haal alle ID's op
         iteration_ids = get_iteration_ids_for_season(selected_season)
         
         if not iteration_ids:
             st.warning(f"Geen data gevonden voor seizoen {selected_season}")
             return
 
-        # Stap B: Maak een string voor de SQL query (bijv: "155, 156")
-        # Dit is veilig omdat iteration_ids integers zijn die uit onze eigen DB komen
+        # Stap B: Maak string voor SQL IN clause
         ids_string = ",".join(map(str, iteration_ids))
 
         # Stap C: De Query
-        # Let op: We gebruiken nu IN (...) in plaats van =
         query = f"""
             SELECT 
                 info."Spelersnaam" as naam,
@@ -114,16 +120,12 @@ def show_shortlists_page():
             LIMIT 50;
         """
         
-        # Voer uit (met suppress_error=True om rode balken te voorkomen)
-        df_shortlist = run_query(
-            query, 
-            params=(min_score, max_age), 
-            suppress_error=True
-        )
+        # Stap D: Uitvoeren (zonder suppress_error parameter!)
+        df_shortlist = run_query(query, params=(min_score, max_age))
         
         # 4. RESULTAAT TONEN
         if not df_shortlist.empty:
-            st.success(f"🔍 {len(df_shortlist)} spelers gevonden in **Seizoen {selected_season}** (Alle competities).")
+            st.success(f"🔍 {len(df_shortlist)} spelers gevonden in **Seizoen {selected_season}**.")
             
             st.dataframe(
                 df_shortlist,
@@ -137,13 +139,13 @@ def show_shortlists_page():
                         min_value=0, 
                         max_value=100
                     ),
-                    "comp_id": None # Verbergen voor de gebruiker
+                    "comp_id": None 
                 },
                 use_container_width=True,
                 hide_index=True
             )
         else:
-            st.warning("Geen spelers gevonden met deze criteria.")
+            st.warning("Geen spelers gevonden met deze criteria (of database toegang issue).")
 
-# Vergeet niet de functie aan te roepen!
+# De functie aanroepen
 show_shortlists_page()
