@@ -132,6 +132,19 @@ if not df_offer.empty:
         </div>
     """, unsafe_allow_html=True)
 
+Dit is een logische aanpassing. Het probleem in de huidige code is dat je st.columns(2) gebruikt om Metrieken (links) en KPI's (rechts) naast elkaar te zetten. Omdat die tabellen breed zijn, overlappen ze.
+
+De oplossing:
+
+We halen de grote split weg en zetten Metrieken en KPI's onder elkaar.
+
+Per onderdeel (Metrieken en KPI's) maken we wél een split: Links de tabellen onder elkaar, Rechts de bijbehorende Spider Chart.
+
+Hier is de aangepaste code voor Sectie C (DATA METRICS). Vervang het hele stuk onder # C. DATA METRICS in jouw bestand met de code hieronder.
+
+De Code Aanpassing
+Python
+
 # C. DATA METRICS
 st.divider()
 score_query = """
@@ -153,6 +166,8 @@ try:
     if not df_scores.empty:
         row = df_scores.iloc[0]
         st.subheader(f"ℹ️ {selected_player_name}")
+        
+        # --- SPELER INFO HEADER ---
         c1, c2, c3, c4 = st.columns(4)
         with c1: st.metric("Huidig Team", row['current_team_name'] or "Onbekend")
         with c2: st.metric("Geboortedatum", str(row['birthdate']) or "-")
@@ -160,6 +175,11 @@ try:
         with c4: st.metric("Voet", row['leg'] or "-")
         st.markdown("---")
 
+        # --- FUNCTIE: SCORE HIGHLIGHTER ---
+        def highlight_high_scores(val):
+            return 'color: #2ecc71; font-weight: bold' if isinstance(val, (int, float)) and val > 66 else ''
+
+        # --- PROFIEL SPIDER CHART & TABEL (BESTAANDE CODE) ---
         profile_mapping = {
             "KVK Centrale Verdediger": row['cb_kvk_score'], "KVK Wingback": row['wb_kvk_score'],
             "KVK Verdedigende Mid.": row['dm_kvk_score'], "KVK Centrale Mid.": row['cm_kvk_score'],
@@ -175,9 +195,6 @@ try:
         active_profiles = {k: v for k, v in profile_mapping.items() if v is not None and v > 0}
         df_chart = pd.DataFrame(list(active_profiles.items()), columns=['Profiel', 'Score'])
         
-        def highlight_high_scores(val):
-            return 'color: #2ecc71; font-weight: bold' if isinstance(val, (int, float)) and val > 66 else ''
-
         top_profile_name = df_chart.sort_values(by='Score', ascending=False).iloc[0]['Profiel'] if not df_chart.empty and df_chart.iloc[0]['Score'] > 66 else None
         if top_profile_name: st.success(f"### ✅ Speler is POSITIEF op data profiel: {top_profile_name}")
         
@@ -192,43 +209,106 @@ try:
                 fig.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 100])))
                 st.plotly_chart(fig, use_container_width=True)
 
-        st.markdown("---"); st.subheader("📊 Impect Scores & KPIs")
+        st.markdown("---")
+        
+        # =========================================================================
+        # NIEUWE LAYOUT: METRIEKEN & KPI's ONDER ELKAAR MET SPIDER CHARTS
+        # =========================================================================
+        
         metrics_config = get_config_for_position(row['position'], POSITION_METRICS)
         kpis_config = get_config_for_position(row['position'], POSITION_KPIS)
-        
-        col_met, col_kpi = st.columns(2)
-        
-        with col_met:
-            st.write("**Metrieken**")
-            if metrics_config:
-                def get_metrics_table(metric_ids):
-                    if not metric_ids: return pd.DataFrame()
-                    ids_tuple = tuple(str(x) for x in metric_ids)
-                    q = """SELECT d.name as "Metriek", d.details_label as "Detail", s.final_score_1_to_100 as "Score" FROM analysis.player_final_scores s JOIN public.player_score_definitions d ON CAST(s.metric_id AS TEXT) = d.id WHERE s."iterationId" = %s AND s."playerId" = %s AND s.metric_id IN %s ORDER BY s.final_score_1_to_100 DESC"""
-                    return run_query(q, params=(selected_iteration_id, p_player_id, ids_tuple))
-                
-                df_aan = get_metrics_table(metrics_config.get('aan_bal', []))
-                df_zonder = get_metrics_table(metrics_config.get('zonder_bal', []))
-                
-                if not df_aan.empty: st.caption("Aan de Bal"); st.dataframe(df_aan.style.applymap(highlight_high_scores, subset=['Score']), use_container_width=True, hide_index=True)
-                if not df_zonder.empty: st.caption("Zonder Bal"); st.dataframe(df_zonder.style.applymap(highlight_high_scores, subset=['Score']), use_container_width=True, hide_index=True)
-            else: st.info("Geen configuratie.")
 
-        with col_kpi:
-            st.write("**KPIs**")
-            if kpis_config:
-                def get_kpis_table(kpi_ids):
-                    if not kpi_ids: return pd.DataFrame()
-                    ids_tuple = tuple(str(x) for x in kpi_ids)
-                    q = """SELECT d.name as "KPI", d.context as "Context", s.final_score_1_to_100 as "Score" FROM analysis.kpis_final_scores s JOIN analysis.kpi_definitions d ON CAST(s.metric_id AS TEXT) = d.id WHERE s."iterationId" = %s AND s."playerId" = %s AND s.metric_id IN %s ORDER BY s.final_score_1_to_100 DESC"""
-                    return run_query(q, params=(selected_iteration_id, p_player_id, ids_tuple))
-                
-                df_k1 = get_kpis_table(kpis_config.get('aan_bal', []))
-                df_k2 = get_kpis_table(kpis_config.get('zonder_bal', []))
-                
-                if not df_k1.empty: st.caption("Aan de Bal"); st.dataframe(df_k1.style.applymap(highlight_high_scores, subset=['Score']), use_container_width=True, hide_index=True)
-                if not df_k2.empty: st.caption("Zonder Bal"); st.dataframe(df_k2.style.applymap(highlight_high_scores, subset=['Score']), use_container_width=True, hide_index=True)
+        # -------------------------------------------------------------------------
+        # DEEL 1: METRIEKEN (Impect Scores)
+        # -------------------------------------------------------------------------
+        st.subheader("📊 Metrieken (Impect)")
 
+        if metrics_config:
+            def get_metrics_table(metric_ids):
+                if not metric_ids: return pd.DataFrame()
+                ids_tuple = tuple(str(x) for x in metric_ids)
+                q = """SELECT d.name as "Metriek", d.details_label as "Detail", s.final_score_1_to_100 as "Score" 
+                       FROM analysis.player_final_scores s 
+                       JOIN public.player_score_definitions d ON CAST(s.metric_id AS TEXT) = d.id 
+                       WHERE s."iterationId" = %s AND s."playerId" = %s AND s.metric_id IN %s 
+                       ORDER BY s.final_score_1_to_100 DESC"""
+                return run_query(q, params=(selected_iteration_id, p_player_id, ids_tuple))
+            
+            df_aan = get_metrics_table(metrics_config.get('aan_bal', []))
+            df_zonder = get_metrics_table(metrics_config.get('zonder_bal', []))
+
+            # Layout: Links de tabellen onder elkaar, Rechts de grafiek
+            c_met_table, c_met_chart = st.columns([1, 1]) 
+
+            with c_met_table:
+                if not df_aan.empty: 
+                    st.caption("⚽ Aan de Bal")
+                    st.dataframe(df_aan.style.applymap(highlight_high_scores, subset=['Score']), use_container_width=True, hide_index=True)
+                
+                if not df_zonder.empty: 
+                    # Klein beetje witruimte
+                    st.write("") 
+                    st.caption("🏃 Zonder Bal")
+                    st.dataframe(df_zonder.style.applymap(highlight_high_scores, subset=['Score']), use_container_width=True, hide_index=True)
+
+            with c_met_chart:
+                # Combineer data voor de grafiek
+                chart_data = pd.concat([df_aan, df_zonder], ignore_index=True)
+                if not chart_data.empty and 'Metriek' in chart_data.columns:
+                    # Kort de namen in indien nodig voor de chart
+                    fig_met = px.line_polar(chart_data, r='Score', theta='Metriek', line_close=True, title="Metrieken Visueel")
+                    fig_met.update_traces(fill='toself', line_color='#2980b9') # Blauw voor metrieken
+                    fig_met.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 100])))
+                    st.plotly_chart(fig_met, use_container_width=True)
+        else:
+            st.info("Geen metrieken configuratie gevonden voor deze positie.")
+
+        st.markdown("---")
+
+        # -------------------------------------------------------------------------
+        # DEEL 2: KPIs
+        # -------------------------------------------------------------------------
+        st.subheader("📈 KPIs")
+
+        if kpis_config:
+            def get_kpis_table(kpi_ids):
+                if not kpi_ids: return pd.DataFrame()
+                ids_tuple = tuple(str(x) for x in kpi_ids)
+                q = """SELECT d.name as "KPI", d.context as "Context", s.final_score_1_to_100 as "Score" 
+                       FROM analysis.kpis_final_scores s 
+                       JOIN analysis.kpi_definitions d ON CAST(s.metric_id AS TEXT) = d.id 
+                       WHERE s."iterationId" = %s AND s."playerId" = %s AND s.metric_id IN %s 
+                       ORDER BY s.final_score_1_to_100 DESC"""
+                return run_query(q, params=(selected_iteration_id, p_player_id, ids_tuple))
+            
+            df_k1 = get_kpis_table(kpis_config.get('aan_bal', []))
+            df_k2 = get_kpis_table(kpis_config.get('zonder_bal', []))
+
+            # Layout: Links de tabellen onder elkaar, Rechts de grafiek
+            c_kpi_table, c_kpi_chart = st.columns([1, 1])
+
+            with c_kpi_table:
+                if not df_k1.empty: 
+                    st.caption("⚽ Aan de Bal")
+                    st.dataframe(df_k1.style.applymap(highlight_high_scores, subset=['Score']), use_container_width=True, hide_index=True)
+                
+                if not df_k2.empty: 
+                    st.write("")
+                    st.caption("🏃 Zonder Bal")
+                    st.dataframe(df_k2.style.applymap(highlight_high_scores, subset=['Score']), use_container_width=True, hide_index=True)
+            
+            with c_kpi_chart:
+                 # Combineer data voor de grafiek (De kolom heet hier 'KPI' ipv 'Metriek')
+                chart_data_kpi = pd.concat([df_k1, df_k2], ignore_index=True)
+                if not chart_data_kpi.empty and 'KPI' in chart_data_kpi.columns:
+                    fig_kpi = px.line_polar(chart_data_kpi, r='Score', theta='KPI', line_close=True, title="KPIs Visueel")
+                    fig_kpi.update_traces(fill='toself', line_color='#8e44ad') # Paars voor KPIs
+                    fig_kpi.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 100])))
+                    st.plotly_chart(fig_kpi, use_container_width=True)
+
+        else:
+             st.info("Geen KPI configuratie gevonden.")
+             
         st.markdown("---")
         st.subheader("💪 Fysieke Data (SkillCorner)")
         
