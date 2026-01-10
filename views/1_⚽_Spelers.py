@@ -1,13 +1,35 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import numpy as np
+import streamlit.components.v1 as components
 from utils import run_query, get_config_for_position, POSITION_METRICS, POSITION_KPIS
 
 st.set_page_config(page_title="Speler Analyse", page_icon="⚽", layout="wide")
 
 # -----------------------------------------------------------------------------
-# 0. NAVIGATIE LOGICA (Redirect afhandeling)
+# 0. CSS VOOR PRINT STYLING
+# -----------------------------------------------------------------------------
+# Dit blok zorgt ervoor dat als je print, de sidebar en knoppen verdwijnen
+st.markdown("""
+    <style>
+        @media print {
+            /* Verberg sidebar, header, en Streamlit elementen */
+            [data-testid="stSidebar"] {display: none;}
+            [data-testid="stHeader"] {display: none;}
+            .stApp > header {display: none;}
+            .block-container {padding-top: 0rem !important;}
+            
+            /* Zorg dat achtergronden wit zijn */
+            body {background-color: white; -webkit-print-color-adjust: exact;}
+            
+            /* Verberg de navigatie en knoppen */
+            .no-print {display: none !important;}
+        }
+    </style>
+""", unsafe_allow_html=True)
+
+# -----------------------------------------------------------------------------
+# 0. NAVIGATIE LOGICA
 # -----------------------------------------------------------------------------
 if "pending_nav" in st.session_state:
     nav = st.session_state.pending_nav
@@ -21,9 +43,19 @@ if "pending_nav" in st.session_state:
         del st.session_state.pending_nav
 
 # -----------------------------------------------------------------------------
-# 1. SIDEBAR SELECTIE
+# 1. SIDEBAR SELECTIE & PRINT KNOPPEN
 # -----------------------------------------------------------------------------
 st.sidebar.header("1. Selecteer Data")
+
+# --- PRINT MODUS TOGGLE ---
+st.sidebar.markdown("---")
+print_mode = st.sidebar.checkbox("🖨️ Print Modus (Layout voor PDF)", value=False)
+if print_mode:
+    st.sidebar.info("Layout is aangepast voor printen (alles onder elkaar).")
+    # Javascript hack om print scherm te openen
+    if st.sidebar.button("🖨️ Print Nu"):
+        components.html("<script>window.print()</script>", height=0, width=0)
+st.sidebar.markdown("---")
 
 try:
     df_seasons = run_query("SELECT DISTINCT season FROM public.iterations ORDER BY season DESC;")
@@ -183,7 +215,10 @@ try:
         top_profile_name = df_chart.sort_values(by='Score', ascending=False).iloc[0]['Profiel'] if not df_chart.empty and df_chart.iloc[0]['Score'] > 66 else None
         if top_profile_name: st.success(f"### ✅ Speler is POSITIEF op data profiel: {top_profile_name}")
         
-        c1, c2 = st.columns([1, 2])
+        # --- PRINT LOGICA VOOR PROFIEL ---
+        # Als print_mode aan staat, zetten we ze ONDER elkaar. Anders NAAST elkaar.
+        c1, c2 = st.columns([1, 2]) if not print_mode else (st.container(), st.container())
+        
         with c1:
             st.write(f"**Positie:** {row['position']}")
             st.dataframe(df_chart.style.applymap(highlight_high_scores, subset=['Score']).format({'Score': '{:.1f}'}), use_container_width=True, hide_index=True)
@@ -196,7 +231,7 @@ try:
 
         st.markdown("---")
         
-        # 3. METRIEKEN & KPIS (NIEUWE LAYOUT)
+        # 3. METRIEKEN & KPIS
         metrics_config = get_config_for_position(row['position'], POSITION_METRICS)
         kpis_config = get_config_for_position(row['position'], POSITION_KPIS)
 
@@ -216,8 +251,13 @@ try:
             df_aan = get_metrics_table(metrics_config.get('aan_bal', []))
             df_zonder = get_metrics_table(metrics_config.get('zonder_bal', []))
 
-            c_met_table, c_met_chart = st.columns([1, 1]) 
-            with c_met_table:
+            # --- PRINT LOGICA VOOR METRIEKEN (We gebruiken 1 kolom als print mode aan staat)
+            use_cols = not print_mode
+            
+            if use_cols: c_table, c_chart = st.columns([1, 1])
+            else: c_table, c_chart = st.container(), st.container()
+
+            with c_table:
                 if not df_aan.empty: 
                     st.caption("⚽ Aan de Bal")
                     st.dataframe(df_aan.style.applymap(highlight_high_scores, subset=['Score']), use_container_width=True, hide_index=True)
@@ -225,7 +265,8 @@ try:
                     st.write("") 
                     st.caption("🏃 Zonder Bal")
                     st.dataframe(df_zonder.style.applymap(highlight_high_scores, subset=['Score']), use_container_width=True, hide_index=True)
-            with c_met_chart:
+            
+            with c_chart:
                 chart_data = pd.concat([df_aan, df_zonder], ignore_index=True)
                 if not chart_data.empty and 'Metriek' in chart_data.columns:
                     fig_met = px.line_polar(chart_data, r='Score', theta='Metriek', line_close=True, title="Metrieken Visueel")
@@ -253,8 +294,12 @@ try:
             df_k1 = get_kpis_table(kpis_config.get('aan_bal', []))
             df_k2 = get_kpis_table(kpis_config.get('zonder_bal', []))
 
-            c_kpi_table, c_kpi_chart = st.columns([1, 1])
-            with c_kpi_table:
+            # --- PRINT LOGICA VOOR KPIS ---
+            use_cols = not print_mode
+            if use_cols: c_table, c_chart = st.columns([1, 1])
+            else: c_table, c_chart = st.container(), st.container()
+
+            with c_table:
                 if not df_k1.empty: 
                     st.caption("⚽ Aan de Bal")
                     st.dataframe(df_k1.style.applymap(highlight_high_scores, subset=['Score']), use_container_width=True, hide_index=True)
@@ -262,7 +307,8 @@ try:
                     st.write("")
                     st.caption("🏃 Zonder Bal")
                     st.dataframe(df_k2.style.applymap(highlight_high_scores, subset=['Score']), use_container_width=True, hide_index=True)
-            with c_kpi_chart:
+            
+            with c_chart:
                 chart_data_kpi = pd.concat([df_k1, df_k2], ignore_index=True)
                 if not chart_data_kpi.empty and 'KPI' in chart_data_kpi.columns:
                     fig_kpi = px.line_polar(chart_data_kpi, r='Score', theta='KPI', line_close=True, title="KPIs Visueel")
@@ -304,7 +350,10 @@ try:
                 cols_present = [c for c in main_cols if c in df_phys.columns]
                 df_phys_main = df_phys[cols_present].copy()
                 st.dataframe(df_phys_main.style.applymap(color_physical_score), use_container_width=True, hide_index=True)
-                with st.expander("📊 Toon ALLE fysieke scores"):
+                
+                # --- PRINT LOGICA VOOR EXPANDERS ---
+                # Als print_mode aanstaat, is expanded=True
+                with st.expander("📊 Toon ALLE fysieke scores", expanded=print_mode):
                     score_cols = [c for c in df_phys.columns if c.endswith('_score')]
                     if score_cols: st.dataframe(df_phys[score_cols].style.applymap(color_physical_score), use_container_width=True, hide_index=True)
             else: st.info("Geen fysieke data gekoppeld.")
@@ -324,7 +373,8 @@ try:
         try:
             df_internal = run_query(scouting_query, params=(str(final_player_id),))
             if not df_internal.empty:
-                c1, c2 = st.columns([2, 1])
+                # Print Layout: Piechart onder tabel ipv ernaast
+                c1, c2 = st.columns([2, 1]) if not print_mode else (st.container(), st.container())
                 with c1:
                     display_cols = ["Datum", "Scout", "Positie", "Profiel", "Rating", "Advies"]
                     df_disp = df_internal.copy()
@@ -335,7 +385,9 @@ try:
                          vc = df_internal['Advies'].value_counts().reset_index(); vc.columns = ['Advies', 'Aantal']
                          fig = px.pie(vc, values='Aantal', names='Advies', hole=0.4, color_discrete_sequence=['#d71920', '#bdc3c7', '#ecf0f1'])
                          st.plotly_chart(fig, use_container_width=True)
-                with st.expander("📖 Lees volledige rapport teksten"):
+                
+                # --- PRINT LOGICA: EXPANDER OPEN ---
+                with st.expander("📖 Lees volledige rapport teksten", expanded=print_mode):
                     for idx, row_int in df_internal.iterrows():
                         date_str = pd.to_datetime(row_int['Datum']).strftime('%d-%m-%Y')
                         icon = "🏆" if row_int['gouden_buzzer'] else "📝"; rating_str = f"({row_int['Rating']}/10)" if row_int['Rating'] else ""
@@ -354,7 +406,7 @@ try:
         try:
             df_rep = run_query(reports_query, params=(selected_iteration_id, p_player_id))
             if not df_rep.empty:
-                c1, c2 = st.columns([2, 1])
+                c1, c2 = st.columns([2, 1]) if not print_mode else (st.container(), st.container())
                 with c1: st.dataframe(df_rep, use_container_width=True, hide_index=True)
                 with c2:
                     vc = df_rep['Verdict'].value_counts().reset_index(); vc.columns=['Verdict','Aantal']
@@ -375,7 +427,7 @@ try:
             df_intel = run_query(intel_q, params=(str(final_player_id),))
             if not df_intel.empty:
                 intel_row = df_intel.iloc[0]
-                ci1, ci2 = st.columns(2)
+                ci1, ci2 = st.columns(2) if not print_mode else (st.container(), st.container())
                 with ci1:
                     st.markdown("##### 🏢 Club & Netwerk")
                     st.info(intel_row['club_informatie'] if intel_row['club_informatie'] else "Geen informatie beschikbaar.")
