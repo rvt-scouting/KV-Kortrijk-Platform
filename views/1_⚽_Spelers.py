@@ -7,23 +7,50 @@ from utils import run_query, get_config_for_position, POSITION_METRICS, POSITION
 st.set_page_config(page_title="Speler Analyse", page_icon="⚽", layout="wide")
 
 # -----------------------------------------------------------------------------
-# 0. CSS VOOR PRINT STYLING
+# 0. CSS VOOR PRINT STYLING (GEOPTIMALISEERD)
 # -----------------------------------------------------------------------------
-# Dit blok zorgt ervoor dat als je print, de sidebar en knoppen verdwijnen
 st.markdown("""
     <style>
         @media print {
-            /* Verberg sidebar, header, en Streamlit elementen */
-            [data-testid="stSidebar"] {display: none;}
-            [data-testid="stHeader"] {display: none;}
-            .stApp > header {display: none;}
-            .block-container {padding-top: 0rem !important;}
+            /* 1. Verberg alle UI elementen die we niet willen zien */
+            [data-testid="stSidebar"], 
+            [data-testid="stHeader"], 
+            .stApp > header,
+            .stDeployButton,
+            footer {
+                display: none !important;
+            }
             
-            /* Zorg dat achtergronden wit zijn */
-            body {background-color: white; -webkit-print-color-adjust: exact;}
-            
-            /* Verberg de navigatie en knoppen */
-            .no-print {display: none !important;}
+            /* 2. Reset de achtergrond en tekstkleur */
+            body, .stApp {
+                background-color: white !important;
+                color: black !important;
+            }
+
+            /* 3. CRUCIAAL: Zorg dat de pagina kan 'groeien' en niet afkapt */
+            [data-testid="stAppViewContainer"], 
+            .main, 
+            .block-container {
+                width: 100% !important;
+                height: auto !important;
+                overflow: visible !important;
+                position: static !important;
+                display: block !important;
+            }
+
+            /* 4. Verwijder witruimte bovenin */
+            .block-container {
+                padding-top: 0rem !important;
+                padding-bottom: 0rem !important;
+                padding-left: 1rem !important;
+                padding-right: 1rem !important;
+            }
+
+            /* 5. Forceer grafieken en tabellen om niet halverwege gebroken te worden */
+            .stDataFrame, .stPlotlyChart {
+                break-inside: avoid;
+                page-break-inside: avoid;
+            }
         }
     </style>
 """, unsafe_allow_html=True)
@@ -51,10 +78,10 @@ st.sidebar.header("1. Selecteer Data")
 st.sidebar.markdown("---")
 print_mode = st.sidebar.checkbox("🖨️ Print Modus (Layout voor PDF)", value=False)
 if print_mode:
-    st.sidebar.info("Layout is aangepast voor printen (alles onder elkaar).")
-    # Javascript hack om print scherm te openen
+    st.sidebar.info("Layout is aangepast. Klik hieronder om te printen:")
+    # FIX: window.parent.print() gebruiken!
     if st.sidebar.button("🖨️ Print Nu"):
-        components.html("<script>window.print()</script>", height=0, width=0)
+        components.html("<script>window.parent.print()</script>", height=0, width=0)
 st.sidebar.markdown("---")
 
 try:
@@ -251,9 +278,8 @@ try:
             df_aan = get_metrics_table(metrics_config.get('aan_bal', []))
             df_zonder = get_metrics_table(metrics_config.get('zonder_bal', []))
 
-            # --- PRINT LOGICA VOOR METRIEKEN (We gebruiken 1 kolom als print mode aan staat)
+            # --- PRINT LOGICA VOOR METRIEKEN ---
             use_cols = not print_mode
-            
             if use_cols: c_table, c_chart = st.columns([1, 1])
             else: c_table, c_chart = st.container(), st.container()
 
@@ -318,7 +344,7 @@ try:
         else:
              st.info("Geen KPI configuratie.")
 
-        # 4. OVERIGE SECTIES (FYSIEK, SCOUTING, ETC)
+        # 4. OVERIGE SECTIES
         st.markdown("---")
         st.subheader("💪 Fysieke Data (SkillCorner)")
         
@@ -351,8 +377,7 @@ try:
                 df_phys_main = df_phys[cols_present].copy()
                 st.dataframe(df_phys_main.style.applymap(color_physical_score), use_container_width=True, hide_index=True)
                 
-                # --- PRINT LOGICA VOOR EXPANDERS ---
-                # Als print_mode aanstaat, is expanded=True
+                # --- PRINT LOGICA: EXPANDER ---
                 with st.expander("📊 Toon ALLE fysieke scores", expanded=print_mode):
                     score_cols = [c for c in df_phys.columns if c.endswith('_score')]
                     if score_cols: st.dataframe(df_phys[score_cols].style.applymap(color_physical_score), use_container_width=True, hide_index=True)
@@ -386,7 +411,7 @@ try:
                          fig = px.pie(vc, values='Aantal', names='Advies', hole=0.4, color_discrete_sequence=['#d71920', '#bdc3c7', '#ecf0f1'])
                          st.plotly_chart(fig, use_container_width=True)
                 
-                # --- PRINT LOGICA: EXPANDER OPEN ---
+                # --- PRINT LOGICA: EXPANDER ---
                 with st.expander("📖 Lees volledige rapport teksten", expanded=print_mode):
                     for idx, row_int in df_internal.iterrows():
                         date_str = pd.to_datetime(row_int['Datum']).strftime('%d-%m-%Y')
